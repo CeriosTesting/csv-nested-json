@@ -1,6 +1,6 @@
 {
 	"name": "@cerios/csv-nested-json",
-	"version": "0.0.0",
+	"version": "1.0.0",
 	"author": "Ronald Veth - Cerios",
 	"description": "Parse CSV files into nested JSON objects with support for dot notation, arrays, and complex data structures",
 	"license": "MIT",
@@ -20,7 +20,9 @@
 	"main": "./dist/index.js",
 	"module": "./dist/index.mjs",
 	"types": "./dist/index.d.ts",
-	"files": ["dist"],
+	"files": [
+		"dist"
+	],
 	"type": "commonjs",
 	"sideEffects": false,
 	"exports": {
