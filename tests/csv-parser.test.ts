@@ -22,7 +22,7 @@ describe("CsvParser", () => {
 			it("should throw error when CSV file does not exist", () => {
 				expect(() => {
 					CsvParser.parseFileSync("non-existent-file.csv");
-				}).toThrow("CSV file non-existent-file.csv not found.");
+				}).toThrow("CSV file not found: non-existent-file.csv");
 			});
 
 			it("should return empty array for empty CSV file", () => {

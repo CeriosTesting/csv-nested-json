@@ -1,21 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CsvFileReader } from "../src/csv-file-reader";
-import { cleanupTestDir, setupTestDir, TEST_DATA_DIR } from "./test-helpers";
+import { TestFolderHelper } from "./test-folder-helper";
+
+const testFolderHelper = new TestFolderHelper("csv-file-reader-tests");
 
 describe("CsvFileReader", () => {
-	beforeAll(() => setupTestDir());
-	afterAll(() => cleanupTestDir());
+	beforeAll(() => testFolderHelper.setupTestDir());
+	afterAll(() => testFolderHelper.cleanupTestDir());
 
 	describe("readFileSync", () => {
 		it("should throw error when CSV file does not exist", () => {
 			expect(() => {
 				CsvFileReader.readFileSync("non-existent-file.csv");
-			}).toThrow("CSV file non-existent-file.csv not found.");
+			}).toThrow("CSV file not found: non-existent-file.csv");
 		});
 
 		it("should read CSV file content synchronously", () => {
-			const csvPath = path.join(TEST_DATA_DIR, "simple.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "simple.csv");
 			const content = "id,name\n1,Alice\n2,Bob";
 			fs.writeFileSync(csvPath, content);
 
@@ -25,7 +27,7 @@ describe("CsvFileReader", () => {
 		});
 
 		it("should read empty CSV file", () => {
-			const csvPath = path.join(TEST_DATA_DIR, "empty.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "empty.csv");
 			fs.writeFileSync(csvPath, "");
 
 			const result = CsvFileReader.readFileSync(csvPath);
@@ -34,7 +36,7 @@ describe("CsvFileReader", () => {
 		});
 
 		it("should respect encoding option", () => {
-			const csvPath = path.join(TEST_DATA_DIR, "utf8.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "utf8.csv");
 			const content = "id,name\n1,Café";
 			fs.writeFileSync(csvPath, content, "utf-8");
 
@@ -47,12 +49,12 @@ describe("CsvFileReader", () => {
 	describe("readFile", () => {
 		it("should throw error when CSV file does not exist", async () => {
 			await expect(CsvFileReader.readFile("non-existent-file.csv")).rejects.toThrow(
-				"CSV file non-existent-file.csv not found."
+				"CSV file not found: non-existent-file.csv"
 			);
 		});
 
 		it("should read CSV file content asynchronously", async () => {
-			const csvPath = path.join(TEST_DATA_DIR, "async-simple.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "async-simple.csv");
 			const content = "id,name\n1,Alice\n2,Bob";
 			fs.writeFileSync(csvPath, content);
 
@@ -62,7 +64,7 @@ describe("CsvFileReader", () => {
 		});
 
 		it("should read empty CSV file asynchronously", async () => {
-			const csvPath = path.join(TEST_DATA_DIR, "async-empty.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "async-empty.csv");
 			fs.writeFileSync(csvPath, "");
 
 			const result = await CsvFileReader.readFile(csvPath);
@@ -71,7 +73,7 @@ describe("CsvFileReader", () => {
 		});
 
 		it("should respect encoding option", async () => {
-			const csvPath = path.join(TEST_DATA_DIR, "async-utf8.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "async-utf8.csv");
 			const content = "id,name\n1,Café";
 			fs.writeFileSync(csvPath, content, "utf-8");
 
@@ -83,7 +85,7 @@ describe("CsvFileReader", () => {
 
 	describe("readStream", () => {
 		it("should read CSV from readable stream", async () => {
-			const csvPath = path.join(TEST_DATA_DIR, "stream-simple.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "stream-simple.csv");
 			const content = "id,name\n1,Alice\n2,Bob";
 			fs.writeFileSync(csvPath, content);
 
@@ -94,7 +96,7 @@ describe("CsvFileReader", () => {
 		});
 
 		it("should read empty stream", async () => {
-			const csvPath = path.join(TEST_DATA_DIR, "stream-empty.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "stream-empty.csv");
 			fs.writeFileSync(csvPath, "");
 
 			const stream = fs.createReadStream(csvPath);
@@ -110,7 +112,7 @@ describe("CsvFileReader", () => {
 		});
 
 		it("should respect encoding option", async () => {
-			const csvPath = path.join(TEST_DATA_DIR, "stream-utf8.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "stream-utf8.csv");
 			const content = "id,name\n1,Café";
 			fs.writeFileSync(csvPath, content, "utf-8");
 
