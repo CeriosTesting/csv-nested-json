@@ -2,15 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { CsvParser } from "../src/csv-parser";
-import { cleanupTestDir, setupTestDir, TEST_DATA_DIR } from "./test-helpers";
+import { TestFolderHelper } from "./test-folder-helper";
+
+const testFolderHelper = new TestFolderHelper("csv-parser-integration-tests");
 
 describe("CsvParser - Integration Tests", () => {
-	beforeAll(() => setupTestDir());
-	afterAll(() => cleanupTestDir());
+	beforeAll(() => testFolderHelper.setupTestDir());
+	afterAll(() => testFolderHelper.cleanupTestDir());
 
 	describe("parseFileSync", () => {
 		it("should parse CSV file synchronously", () => {
-			const csvPath = path.join(TEST_DATA_DIR, "integration-sync.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "integration-sync.csv");
 			const csvContent = `id,name,address.city
 1,Alice,NYC
 2,Bob,LA`;
@@ -27,11 +29,11 @@ describe("CsvParser - Integration Tests", () => {
 		it("should throw error when file does not exist", () => {
 			expect(() => {
 				CsvParser.parseFileSync("non-existent-file.csv");
-			}).toThrow("CSV file non-existent-file.csv not found.");
+			}).toThrow("CSV file not found: non-existent-file.csv");
 		});
 
 		it("should handle custom options", () => {
-			const csvPath = path.join(TEST_DATA_DIR, "integration-semicolon.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "integration-semicolon.csv");
 			const csvContent = `id;name;age
 1;Alice;25
 2;Bob;30`;
@@ -48,7 +50,7 @@ describe("CsvParser - Integration Tests", () => {
 
 	describe("parseFile", () => {
 		it("should parse CSV file asynchronously", async () => {
-			const csvPath = path.join(TEST_DATA_DIR, "integration-async.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "integration-async.csv");
 			const csvContent = `id,name,address.city
 1,Alice,NYC
 2,Bob,LA`;
@@ -64,12 +66,12 @@ describe("CsvParser - Integration Tests", () => {
 
 		it("should throw error when file does not exist", async () => {
 			await expect(CsvParser.parseFile("non-existent-file.csv")).rejects.toThrow(
-				"CSV file non-existent-file.csv not found."
+				"CSV file not found: non-existent-file.csv"
 			);
 		});
 
 		it("should handle custom options", async () => {
-			const csvPath = path.join(TEST_DATA_DIR, "integration-async-semicolon.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "integration-async-semicolon.csv");
 			const csvContent = `id;name;age
 1;Alice;25
 2;Bob;30`;
@@ -136,7 +138,7 @@ describe("CsvParser - Integration Tests", () => {
 
 	describe("parseStream", () => {
 		it("should parse CSV from readable stream", async () => {
-			const csvPath = path.join(TEST_DATA_DIR, "integration-stream.csv");
+			const csvPath = path.join(testFolderHelper.testFolder, "integration-stream.csv");
 			const csvContent = `id,name,address.city
 1,Alice,NYC
 2,Bob,LA`;
