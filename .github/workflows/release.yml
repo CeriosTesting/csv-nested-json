@@ -15,6 +15,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,43 +38,13 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Check for changesets
+      - name: Create Release Pull Request or Publish
         id: changesets
-        run: |
-          if [ -d ".changeset" ] && [ "$(ls -A .changeset/*.md 2>/dev/null | grep -v README.md)" ]; then
-            echo "has_changesets=true" >> $GITHUB_OUTPUT
-            echo "Found changesets to release"
-          else
-            echo "has_changesets=false" >> $GITHUB_OUTPUT
-            echo "No changesets found"
-          fi
-
-      - name: Version package
-        if: steps.changesets.outputs.has_changesets == 'true'
-        run: npx changeset version
-
-      - name: Commit version changes
-        if: steps.changesets.outputs.has_changesets == 'true'
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add .
-          git commit -m "chore: version package" || echo "No changes to commit"
-          git push
-
-      - name: Publish to npm
-        if: steps.changesets.outputs.has_changesets == 'true'
-        run: npx changeset publish
+        uses: changesets/action@v1
+        with:
+          version: npx changeset version
+          publish: npx changeset publish --provenance
+          commit: "chore(release): bump version"
+          title: "chore(release): bump version"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Push tags
-        if: steps.changesets.outputs.has_changesets == 'true'
-        run: git push --follow-tags
-
-      - name: No changesets found
-        if: steps.changesets.outputs.has_changesets == 'false'
-        run: |
-          echo "No changesets found. Add changesets using 'npx changeset' before releasing."
-          exit 1
