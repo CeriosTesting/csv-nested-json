@@ -277,26 +277,53 @@ describe("Array Suffix Indicator", () => {
 		});
 
 		it("should handle deeply nested forced arrays with multiple tasks", () => {
-			// Note: When you have nested arrays within arrays, continuation rows create
-			// new parent array items. To add tasks to the same project, use a structure
-			// where tasks don't have the nested array suffix on the parent.
-			const csvContent = `id,company,projects[].tasks[].title,projects[].tasks[].assignee
-1,TechCorp,Build UI,Alice
-,,Add API,Bob`;
+			// With the hierarchy-aware merging, continuation rows correctly append to nested arrays
+			// when only the nested array fields have values
+			const csvContent = `id,company,projects[].name,projects[].tasks[].title,projects[].tasks[].assignee
+1,TechCorp,Website,Build UI,Alice
+,,,Add API,Bob`;
 
 			const result = CsvParser.parseString(csvContent);
 
-			// Each continuation row creates a new projects item with its own tasks
+			// Continuation row without projects[].name appends to existing project's tasks
 			expect(result).toEqual([
 				{
 					id: "1",
 					company: "TechCorp",
 					projects: [
 						{
+							name: "Website",
+							tasks: [
+								{ title: "Build UI", assignee: "Alice" },
+								{ title: "Add API", assignee: "Bob" },
+							],
+						},
+					],
+				},
+			]);
+		});
+
+		it("should create new project when projects[].name has value in continuation row", () => {
+			// When a sibling field (name) has value, a new parent item is created
+			const csvContent = `id,company,projects[].name,projects[].tasks[].title,projects[].tasks[].assignee
+1,TechCorp,Website,Build UI,Alice
+,,Mobile,Design App,Charlie`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			// Continuation row with projects[].name creates new project
+			expect(result).toEqual([
+				{
+					id: "1",
+					company: "TechCorp",
+					projects: [
+						{
+							name: "Website",
 							tasks: [{ title: "Build UI", assignee: "Alice" }],
 						},
 						{
-							tasks: [{ title: "Add API", assignee: "Bob" }],
+							name: "Mobile",
+							tasks: [{ title: "Design App", assignee: "Charlie" }],
 						},
 					],
 				},
@@ -420,6 +447,205 @@ describe("Array Suffix Indicator", () => {
 					id: "1",
 					name: "John",
 					children: [{ name: "Alice" }],
+				},
+			]);
+		});
+	});
+
+	describe("nested forced arrays with continuation rows", () => {
+		it("should append to nested array when only nested field has value", () => {
+			const csvContent = `id,items[].name,items[].tags[]
+1,item1,tag1
+,,tag2`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					items: [{ name: "item1", tags: ["tag1", "tag2"] }],
+				},
+			]);
+		});
+
+		it("should create new parent item when sibling field has value", () => {
+			const csvContent = `id,items[].name,items[].tags[]
+1,item1,tag1
+,item2,tag2`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					items: [
+						{ name: "item1", tags: ["tag1"] },
+						{ name: "item2", tags: ["tag2"] },
+					],
+				},
+			]);
+		});
+
+		it("should handle multiple tags appended to same item", () => {
+			const csvContent = `id,items[].name,items[].tags[]
+1,item1,tag1
+,,tag2
+,,tag3
+,item2,tag4`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					items: [
+						{ name: "item1", tags: ["tag1", "tag2", "tag3"] },
+						{ name: "item2", tags: ["tag4"] },
+					],
+				},
+			]);
+		});
+
+		it("should handle triple-nested arrays", () => {
+			const csvContent = `id,a[].name,a[].b[].name,a[].b[].c[]
+1,a1,b1,c1
+,,,c2
+,,b2,c3
+,a2,b3,c4`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					a: [
+						{
+							name: "a1",
+							b: [
+								{ name: "b1", c: ["c1", "c2"] },
+								{ name: "b2", c: ["c3"] },
+							],
+						},
+						{
+							name: "a2",
+							b: [{ name: "b3", c: ["c4"] }],
+						},
+					],
+				},
+			]);
+		});
+
+		it("should handle multiple parallel nested arrays", () => {
+			const csvContent = `id,items[].name,items[].tags[],items[].colors[]
+1,item1,tag1,red
+,,tag2,
+,,,blue`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					items: [{ name: "item1", tags: ["tag1", "tag2"], colors: ["red", "blue"] }],
+				},
+			]);
+		});
+
+		it("should handle deep sibling non-array fields", () => {
+			const csvContent = `id,items[].name,items[].details.color,items[].tags[]
+1,item1,red,tag1
+,,blue,tag2`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			// Row 2 has details.color value → creates new item
+			expect(result).toEqual([
+				{
+					id: "1",
+					items: [
+						{ name: "item1", details: { color: "red" }, tags: ["tag1"] },
+						{ details: { color: "blue" }, tags: ["tag2"] },
+					],
+				},
+			]);
+		});
+
+		it("should handle original issue - timeSeries with nested paths", () => {
+			const csvContent = `testCaseName,tnmd.timeSeries[].businessType,tnmd.timeSeries[].period.resolution
+Test1,A46,P1M
+,A85,P1M`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			expect(result).toEqual([
+				{
+					testCaseName: "Test1",
+					tnmd: {
+						timeSeries: [
+							{ businessType: "A46", period: { resolution: "P1M" } },
+							{ businessType: "A85", period: { resolution: "P1M" } },
+						],
+					},
+				},
+			]);
+		});
+
+		it("should handle single row with nested forced array - creates arrays with 1 item", () => {
+			const csvContent = `id,items[].name,items[].tags[]
+1,item1,tag1`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					items: [{ name: "item1", tags: ["tag1"] }],
+				},
+			]);
+		});
+
+		it("should handle nested arrays without intermediate sibling fields", () => {
+			// When there are no sibling fields, continuation rows append to the innermost array
+			const csvContent = `id,items[].tags[]
+1,tag1
+,tag2
+,tag3`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					items: [{ tags: ["tag1", "tag2", "tag3"] }],
+				},
+			]);
+		});
+
+		it("should handle complex real-world scenario", () => {
+			const csvContent = `testCaseName,tnmd.type,tnmd.timeSeries[].businessType,tnmd.timeSeries[].period.resolution,tnmd.timeSeries[].period.point.amount,expected.costs[].price,expected.costs[].type
+Happy Flow,A92,A46,P1M,100,17.06,INTERNAL
+,,,,,0,SYSTEM
+,,A85,P1M,200,19.79,CAPACITY`;
+
+			const result = CsvParser.parseString(csvContent, { autoParseNumbers: true });
+
+			expect(result).toEqual([
+				{
+					testCaseName: "Happy Flow",
+					tnmd: {
+						type: "A92",
+						timeSeries: [
+							{ businessType: "A46", period: { resolution: "P1M", point: { amount: 100 } } },
+							{ businessType: "A85", period: { resolution: "P1M", point: { amount: 200 } } },
+						],
+					},
+					expected: {
+						costs: [
+							{ price: 17.06, type: "INTERNAL" },
+							{ price: 0, type: "SYSTEM" },
+							{ price: 19.79, type: "CAPACITY" },
+						],
+					},
 				},
 			]);
 		});

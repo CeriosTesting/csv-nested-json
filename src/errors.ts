@@ -130,3 +130,37 @@ export class CsvEncodingError extends CsvParseError {
 		}
 	}
 }
+
+/**
+ * Error thrown when duplicate headers are detected and the strategy is 'error'.
+ * Contains the list of duplicate header names and the row number where they were found.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   CsvParser.parseString('id,name,id\n1,Alice,2');
+ * } catch (error) {
+ *   if (error instanceof CsvDuplicateHeaderError) {
+ *     console.log(`Duplicate headers: ${error.duplicateHeaders.join(', ')}`);
+ *     // Output: "Duplicate headers: id"
+ *   }
+ * }
+ * ```
+ */
+export class CsvDuplicateHeaderError extends CsvParseError {
+	/**
+	 * Creates a new duplicate header error
+	 * @param duplicateHeaders - Array of header names that appear more than once
+	 * @param headerRow - The 1-based row number where the headers are located
+	 */
+	constructor(
+		public readonly duplicateHeaders: string[],
+		public readonly headerRow: number = 1
+	) {
+		super(`Duplicate headers found at row ${headerRow}: ${duplicateHeaders.join(", ")}`, headerRow);
+		this.name = "CsvDuplicateHeaderError";
+		if (Error.captureStackTrace) {
+			Error.captureStackTrace(this, CsvDuplicateHeaderError);
+		}
+	}
+}

@@ -163,7 +163,7 @@ describe("Parser Options - New Features", () => {
 
 		it("should filter with multiple conditions", () => {
 			const csv = "id,age,status\n1,25,active\n2,17,active\n3,30,deleted\n4,22,active";
-			const filter: RowFilter = record => parseInt(record.age) >= 18 && record.status === "active";
+			const filter: RowFilter = record => parseInt(record.age, 10) >= 18 && record.status === "active";
 
 			const result = CsvParser.parseString(csv, { rowFilter: filter });
 

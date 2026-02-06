@@ -8,7 +8,13 @@ export type { CsvStreamParserOptions } from "./csv-stream-parser";
 // Streaming parser for large files
 export { CsvStreamParser } from "./csv-stream-parser";
 // Error classes
-export { CsvEncodingError, CsvFileNotFoundError, CsvParseError, CsvValidationError } from "./errors";
+export {
+	CsvDuplicateHeaderError,
+	CsvEncodingError,
+	CsvFileNotFoundError,
+	CsvParseError,
+	CsvValidationError,
+} from "./errors";
 export type { JsonToCsvOptions } from "./json-to-csv";
 // JSON to CSV conversion
 export { JsonToCsv } from "./json-to-csv";
@@ -19,11 +25,14 @@ export type {
 	ArrayMode,
 	CsvParserOptions,
 	CsvRecord,
+	DuplicateHeaderStrategy,
 	EmptyArrayBehavior,
 	HeaderTransformer,
 	NestedObject,
 	NestedValue,
 	NullRepresentation,
+	ProgressCallback,
+	ProgressInfo,
 	RowFilter,
 	ValidationMode,
 	ValueTransformer,
