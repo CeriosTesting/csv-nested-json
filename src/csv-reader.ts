@@ -1,5 +1,5 @@
-import { CsvValidationError } from "./errors";
-import type { CsvParserOptions, CsvRecord } from "./types";
+import { CsvDuplicateHeaderError, CsvValidationError } from "./errors";
+import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, ValidationMode } from "./types";
 
 /**
  * Low-level CSV parsing utilities.
@@ -60,18 +60,35 @@ export class CsvReader {
 		if (dataStartIndex >= lines.length) return [];
 
 		// Parse header (first line after skipped rows)
-		let headers = this.parseLine(lines[dataStartIndex], delimiter, quote);
-		if (headers.length === 0) return [];
+		const originalHeaders = this.parseLine(lines[dataStartIndex], delimiter, quote);
+		if (originalHeaders.length === 0) return [];
+
+		// Apply column filtering FIRST (based on original header names)
+		const { filteredHeaders: filteredOriginalHeaders, includedIndices } = this.filterColumns(
+			originalHeaders,
+			options,
+			validationMode
+		);
 
 		// Apply header transformer if specified
+		let headers = filteredOriginalHeaders;
 		if (options.headerTransformer) {
 			headers = headers.map(options.headerTransformer);
 		}
 
-		// Apply column mapping if specified
+		// Apply column mapping if specified (based on transformed header names)
 		if (options.columnMapping) {
 			headers = headers.map(h => options.columnMapping?.[h] ?? h);
 		}
+
+		// Handle duplicate headers (after all transformations)
+		const dupStrategy = options.duplicateHeaders ?? "error";
+		const { processedHeaders, duplicateIndices } = this.detectAndProcessDuplicateHeaders(
+			headers,
+			dupStrategy,
+			skipRows + 1
+		);
+		headers = processedHeaders;
 
 		// Parse data rows
 		const records: CsvRecord[] = [];
@@ -98,14 +115,42 @@ export class CsvReader {
 
 			const record: CsvRecord = {};
 			for (let j = 0; j < headers.length; j++) {
-				let value = j < values.length ? values[j] : "";
+				// Get the original column index for this filtered header
+				const originalIndex = includedIndices[j];
+				let value = originalIndex < values.length ? values[originalIndex] : "";
 
 				// Apply default value if cell is empty
 				if (value === "" && options.defaultValues?.[headers[j]] !== undefined) {
 					value = options.defaultValues[headers[j]];
 				}
 
-				record[headers[j]] = value;
+				const header = headers[j];
+
+				// Handle duplicate values based on strategy
+				if (duplicateIndices.has(j)) {
+					switch (dupStrategy) {
+						case "first":
+							// Only set if not already present
+							if (!(header in record)) {
+								record[header] = value;
+							}
+							break;
+						case "combine":
+							// Combine into comma-separated values (arrays handled by NestedJsonConverter)
+							if (header in record) {
+								record[header] = record[header] ? `${record[header]},${value}` : value;
+							} else {
+								record[header] = value;
+							}
+							break;
+						default:
+							// Just overwrite (default behavior)
+							record[header] = value;
+							break;
+					}
+				} else {
+					record[header] = value;
+				}
 			}
 
 			// Apply row filter if specified
@@ -245,5 +290,139 @@ export class CsvReader {
 		values.push(currentValue);
 
 		return values;
+	}
+
+	/**
+	 * Detect duplicate headers and process them according to the strategy.
+	 * Returns the processed headers and a set of indices that are duplicates.
+	 *
+	 * @param headers - The parsed header names
+	 * @param strategy - The duplicate handling strategy
+	 * @param headerRow - The 1-based row number for error reporting
+	 * @returns Object with processed headers and duplicate indices
+	 * @throws {CsvDuplicateHeaderError} If strategy is 'error' and duplicates found
+	 */
+	private static detectAndProcessDuplicateHeaders(
+		headers: string[],
+		strategy: DuplicateHeaderStrategy,
+		headerRow: number
+	): { processedHeaders: string[]; duplicateIndices: Set<number> } {
+		// Build a map of header -> list of indices
+		const headerMap = new Map<string, number[]>();
+		for (let i = 0; i < headers.length; i++) {
+			const key = headers[i];
+			const indices = headerMap.get(key) || [];
+			indices.push(i);
+			headerMap.set(key, indices);
+		}
+
+		// Find which headers have duplicates
+		const duplicateHeaders: string[] = [];
+		const duplicateIndices = new Set<number>();
+
+		for (const [_key, indices] of headerMap.entries()) {
+			if (indices.length > 1) {
+				// Use the original header name (from first occurrence) for error messages
+				duplicateHeaders.push(headers[indices[0]]);
+				for (const idx of indices) {
+					duplicateIndices.add(idx);
+				}
+			}
+		}
+
+		// If no duplicates, return original headers
+		if (duplicateHeaders.length === 0) {
+			return { processedHeaders: headers, duplicateIndices };
+		}
+
+		// Apply strategy
+		switch (strategy) {
+			case "error":
+				throw new CsvDuplicateHeaderError(duplicateHeaders, headerRow);
+
+			case "rename": {
+				// Rename duplicates: keep first as-is, append _1, _2, etc. to subsequent
+				const processedHeaders = [...headers];
+				for (const indices of headerMap.values()) {
+					if (indices.length > 1) {
+						// Skip the first occurrence (index 0), rename the rest
+						for (let i = 1; i < indices.length; i++) {
+							const originalIdx = indices[i];
+							processedHeaders[originalIdx] = `${headers[originalIdx]}_${i}`;
+						}
+					}
+				}
+				return { processedHeaders, duplicateIndices };
+			}
+
+			case "combine":
+			case "first":
+			case "last":
+				// These strategies don't modify headers, just affect value assignment
+				return { processedHeaders: headers, duplicateIndices };
+
+			default:
+				return { processedHeaders: headers, duplicateIndices };
+		}
+	}
+
+	/**
+	 * Filter columns based on includeColumns and excludeColumns options.
+	 * Returns the filtered headers and an array mapping filtered indices to original indices.
+	 *
+	 * @param headers - The parsed header names (after transformations)
+	 * @param options - Parser options containing includeColumns/excludeColumns
+	 * @param validationMode - How to handle warnings about missing columns
+	 * @returns Object with filtered headers and index mapping array
+	 */
+	private static filterColumns(
+		headers: string[],
+		options: CsvParserOptions,
+		validationMode: ValidationMode
+	): { filteredHeaders: string[]; includedIndices: number[] } {
+		const { includeColumns, excludeColumns } = options;
+
+		// If no filtering specified, include all
+		if ((!includeColumns || includeColumns.length === 0) && (!excludeColumns || excludeColumns.length === 0)) {
+			return {
+				filteredHeaders: headers,
+				includedIndices: headers.map((_, i) => i),
+			};
+		}
+
+		const headerSet = new Set(headers);
+		let indicesToInclude: number[];
+
+		// Step 1: Apply includeColumns first (if specified)
+		if (includeColumns && includeColumns.length > 0) {
+			const includeSet = new Set(includeColumns);
+
+			// Warn about columns that don't exist
+			for (const col of includeColumns) {
+				if (!headerSet.has(col) && validationMode !== "ignore") {
+					const message = `Column '${col}' specified in includeColumns does not exist in the CSV headers.`;
+					if (validationMode === "warn") {
+						// biome-ignore lint/suspicious/noConsole: User explicitly requested warning mode
+						console.warn(`Warning: ${message}`);
+					}
+					// Note: we don't throw for 'error' mode here, just warn - it's not a fatal issue
+				}
+			}
+
+			indicesToInclude = headers.map((h, i) => (includeSet.has(h) ? i : -1)).filter(i => i !== -1);
+		} else {
+			// Start with all columns
+			indicesToInclude = headers.map((_, i) => i);
+		}
+
+		// Step 2: Apply excludeColumns (filter from the result)
+		if (excludeColumns && excludeColumns.length > 0) {
+			const excludeSet = new Set(excludeColumns);
+			indicesToInclude = indicesToInclude.filter(i => !excludeSet.has(headers[i]));
+		}
+
+		const filteredHeaders = indicesToInclude.map(i => headers[i]);
+
+		return { filteredHeaders, includedIndices: indicesToInclude };
 	}
 }

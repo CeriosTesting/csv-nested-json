@@ -1,5 +1,6 @@
 import { Transform, type TransformCallback, type TransformOptions } from "node:stream";
-import type { CsvParserOptions, NestedObject } from "./types";
+import { CsvDuplicateHeaderError } from "./errors";
+import type { CsvParserOptions, DuplicateHeaderStrategy, NestedObject, ProgressCallback } from "./types";
 
 /**
  * Options for the streaming CSV parser.
@@ -13,6 +14,50 @@ export interface CsvStreamParserOptions extends CsvParserOptions, TransformOptio
 	 * @default true
 	 */
 	nested?: boolean;
+
+	/**
+	 * Callback function called periodically to report parsing progress.
+	 * Can be synchronous or asynchronous.
+	 *
+	 * @example
+	 * ```typescript
+	 * const parser = new CsvStreamParser({
+	 *   progressCallback: (info) => {
+	 *     console.log(`Parsed ${info.recordsEmitted} records`);
+	 *   }
+	 * });
+	 * ```
+	 */
+	progressCallback?: ProgressCallback;
+
+	/**
+	 * How often to call the progress callback, in number of records.
+	 * The callback is invoked every N records emitted.
+	 * @default 100
+	 */
+	progressInterval?: number;
+
+	/**
+	 * Number of records to batch together before emitting.
+	 * When set to a value greater than 1, the stream emits arrays of records
+	 * instead of individual records.
+	 *
+	 * Note: When using batchSize > 1, each 'data' event receives an array.
+	 * The static parseStream() method always returns a flat array regardless
+	 * of this setting.
+	 *
+	 * @default 1
+	 *
+	 * @example
+	 * ```typescript
+	 * const parser = new CsvStreamParser({ batchSize: 100 });
+	 * for await (const batch of stream.pipe(parser)) {
+	 *   // batch is an array of up to 100 records
+	 *   console.log(`Received ${batch.length} records`);
+	 * }
+	 * ```
+	 */
+	batchSize?: number;
 }
 
 /**
@@ -70,6 +115,23 @@ export class CsvStreamParser extends Transform {
 	private stripBom: boolean;
 	private bomStripped = false;
 	private nullSet: Set<string>;
+	private duplicateStrategy: DuplicateHeaderStrategy;
+	private duplicateIndices: Set<number> = new Set();
+	private includedIndices: number[] = [];
+
+	// Progress tracking
+	private bytesProcessed = 0;
+	private recordsEmitted = 0;
+	private startTime = 0;
+	private progressInterval: number;
+
+	// Limit tracking
+	private limit: number;
+	private limitReached = false;
+
+	// Batch processing
+	private batchSize: number;
+	private recordBatch: NestedObject[] = [];
 
 	/**
 	 * Creates a new streaming CSV parser.
@@ -95,6 +157,80 @@ export class CsvStreamParser extends Transform {
 		this.stripBom = options.stripBom !== false;
 		// Initialize null values set
 		this.nullSet = new Set((options.nullValues ?? ["null", "NULL", "nil", "NIL"]).map(v => v.toLowerCase()));
+		// Initialize duplicate header handling
+		this.duplicateStrategy = options.duplicateHeaders ?? "error";
+		// Initialize progress tracking
+		this.progressInterval = options.progressInterval ?? 100;
+		// Initialize limit
+		this.limit = options.limit ?? 0;
+		// Initialize batch processing
+		this.batchSize = options.batchSize ?? 1;
+	}
+
+	/**
+	 * Parse a readable stream and return all records as a Promise.
+	 * This is a convenience method that collects all streamed records into an array.
+	 *
+	 * For true streaming with backpressure handling, use the pipe-based API instead.
+	 *
+	 * @typeParam T - The expected type of each record in the result array
+	 * @param stream - Readable stream containing CSV data
+	 * @param options - Parser options
+	 * @returns Promise resolving to array of parsed records
+	 *
+	 * @example
+	 * ```typescript
+	 * import { createReadStream } from 'node:fs';
+	 * import { CsvStreamParser } from '@cerios/csv-nested-json';
+	 *
+	 * const stream = createReadStream('data.csv');
+	 * const records = await CsvStreamParser.parseStream(stream, {
+	 *   delimiter: ',',
+	 *   autoParseNumbers: true
+	 * });
+	 * ```
+	 *
+	 * @example
+	 * ```typescript
+	 * // Get flat records instead of nested
+	 * const flatRecords = await CsvStreamParser.parseStream(stream, {
+	 *   nested: false
+	 * });
+	 * ```
+	 */
+	static async parseStream<T = NestedObject>(
+		stream: import("node:stream").Readable,
+		options: CsvStreamParserOptions = {}
+	): Promise<T[]> {
+		const parser = new CsvStreamParser(options);
+		const records: T[] = [];
+		const batchSize = options.batchSize ?? 1;
+
+		return new Promise((resolve, reject) => {
+			stream
+				.pipe(parser)
+				.on("data", (record: T | T[]) => {
+					// Flatten batches if batchSize > 1
+					if (batchSize > 1 && Array.isArray(record)) {
+						records.push(...record);
+					} else {
+						records.push(record as T);
+					}
+				})
+				.on("end", () => {
+					resolve(records);
+				})
+				.on("error", (error: Error) => {
+					parser.destroy(); // Clean up on error
+					reject(error);
+				});
+
+			// Handle source stream errors
+			stream.on("error", (error: Error) => {
+				parser.destroy(); // Clean up on error
+				reject(error);
+			});
+		});
 	}
 
 	/**
@@ -102,8 +238,22 @@ export class CsvStreamParser extends Transform {
 	 * @internal
 	 */
 	_transform(chunk: Buffer | string, _encoding: BufferEncoding, callback: TransformCallback): void {
+		// Early exit if limit reached
+		if (this.limitReached) {
+			callback();
+			return;
+		}
+
 		try {
 			let data = typeof chunk === "string" ? chunk : chunk.toString(this.options.encoding || "utf-8");
+
+			// Track start time on first chunk
+			if (this.startTime === 0) {
+				this.startTime = Date.now();
+			}
+
+			// Track bytes processed
+			this.bytesProcessed += Buffer.byteLength(data, "utf-8");
 
 			// Strip BOM from the first chunk if enabled
 			if (this.stripBom && !this.bomStripped) {
@@ -126,13 +276,36 @@ export class CsvStreamParser extends Transform {
 	_flush(callback: TransformCallback): void {
 		try {
 			// Process any remaining data in the buffer
-			if (this.buffer.trim()) {
+			if (this.buffer.trim() && !this.limitReached) {
 				this.processLine(this.buffer);
 			}
+
+			// Flush any remaining batch
+			if (this.batchSize > 1 && this.recordBatch.length > 0 && !this.limitReached) {
+				this.push(this.recordBatch);
+				this.recordBatch = [];
+			}
+
 			callback();
 		} catch (error) {
 			callback(error instanceof Error ? error : new Error(String(error)));
 		}
+	}
+
+	/**
+	 * Destroy implementation - cleans up resources.
+	 * @internal
+	 */
+	_destroy(error: Error | null, callback: (error: Error | null) => void): void {
+		// Clear internal state to release memory
+		this.buffer = "";
+		this.headers = [];
+		this.recordBatch = [];
+		this.duplicateIndices.clear();
+		this.includedIndices = [];
+		this.nullSet.clear();
+
+		callback(error);
 	}
 
 	/**
@@ -192,6 +365,11 @@ export class CsvStreamParser extends Transform {
 	 * Process a single line of CSV data.
 	 */
 	private processLine(line: string): void {
+		// Early exit if limit reached
+		if (this.limitReached) {
+			return;
+		}
+
 		// Skip empty lines
 		if (line.trim() === "") {
 			return;
@@ -207,17 +385,31 @@ export class CsvStreamParser extends Transform {
 
 		// First non-skipped line is the header
 		if (!this.headersProcessed) {
-			this.headers = values;
+			const originalHeaders = values;
+
+			// Apply column filtering FIRST (based on original header names)
+			const { filteredHeaders: filteredOriginalHeaders, includedIndices } = this.filterColumns(originalHeaders);
+			this.includedIndices = includedIndices;
 
 			// Apply header transformer if specified
+			let headers = filteredOriginalHeaders;
 			if (this.options.headerTransformer) {
-				this.headers = this.headers.map(this.options.headerTransformer);
+				headers = headers.map(this.options.headerTransformer);
 			}
 
-			// Apply column mapping if specified
+			// Apply column mapping if specified (based on transformed header names)
 			if (this.options.columnMapping) {
-				this.headers = this.headers.map(h => this.options.columnMapping?.[h] ?? h);
+				headers = headers.map(h => this.options.columnMapping?.[h] ?? h);
 			}
+
+			// Handle duplicate headers (after all transformations)
+			const { processedHeaders, duplicateIndices } = this.detectAndProcessDuplicateHeaders(
+				headers,
+				this.duplicateStrategy,
+				this.skipRows + 1
+			);
+			this.headers = processedHeaders;
+			this.duplicateIndices = duplicateIndices;
 
 			this.headersProcessed = true;
 			return;
@@ -238,11 +430,46 @@ export class CsvStreamParser extends Transform {
 
 		// Convert to nested if enabled (default)
 		const nested = this.options.nested !== false;
-		if (nested) {
-			const nestedRecord = this.unflatten(transformed);
-			this.push(nestedRecord);
+		const outputRecord = nested ? this.unflatten(transformed) : transformed;
+
+		// Handle batching
+		if (this.batchSize > 1) {
+			this.recordBatch.push(outputRecord as NestedObject);
+			if (this.recordBatch.length >= this.batchSize) {
+				this.push(this.recordBatch);
+				this.recordBatch = [];
+			}
 		} else {
-			this.push(transformed);
+			this.push(outputRecord);
+		}
+
+		// Track records emitted (count individual records, not batches)
+		this.recordsEmitted++;
+
+		// Check limit (applied after row filtering)
+		if (this.limit > 0 && this.recordsEmitted >= this.limit) {
+			this.limitReached = true;
+			// Flush any remaining batch before ending
+			if (this.batchSize > 1 && this.recordBatch.length > 0) {
+				this.push(this.recordBatch);
+				this.recordBatch = [];
+			}
+			this.push(null); // Signal end of stream
+			return;
+		}
+
+		// Call progress callback if configured
+		if (this.options.progressCallback && this.recordsEmitted % this.progressInterval === 0) {
+			const result = this.options.progressCallback({
+				bytesProcessed: this.bytesProcessed,
+				recordsEmitted: this.recordsEmitted,
+				headersProcessed: this.headersProcessed,
+				elapsedMs: Date.now() - this.startTime,
+			});
+			// Handle async callback
+			if (result instanceof Promise) {
+				result.catch(() => {}); // Ignore errors in callback
+			}
 		}
 	}
 
@@ -284,14 +511,42 @@ export class CsvStreamParser extends Transform {
 	private createRecord(values: string[]): Record<string, string> {
 		const record: Record<string, string> = {};
 		for (let i = 0; i < this.headers.length; i++) {
-			let value = i < values.length ? values[i] : "";
+			// Get the original column index for this filtered header
+			const originalIndex = this.includedIndices[i];
+			let value = originalIndex < values.length ? values[originalIndex] : "";
 
 			// Apply default value if cell is empty
 			if (value === "" && this.options.defaultValues?.[this.headers[i]] !== undefined) {
 				value = this.options.defaultValues[this.headers[i]];
 			}
 
-			record[this.headers[i]] = value;
+			const header = this.headers[i];
+
+			// Handle duplicate values based on strategy
+			if (this.duplicateIndices.has(i)) {
+				switch (this.duplicateStrategy) {
+					case "first":
+						// Only set if not already present
+						if (!(header in record)) {
+							record[header] = value;
+						}
+						break;
+					case "combine":
+						// Combine into comma-separated values
+						if (header in record) {
+							record[header] = record[header] ? `${record[header]},${value}` : value;
+						} else {
+							record[header] = value;
+						}
+						break;
+					default:
+						// Just overwrite (default behavior)
+						record[header] = value;
+						break;
+				}
+			} else {
+				record[header] = value;
+			}
 		}
 		return record;
 	}
@@ -389,7 +644,6 @@ export class CsvStreamParser extends Transform {
 				return undefined;
 			case "empty-string":
 				return "";
-			case "omit":
 			default:
 				return undefined;
 		}
@@ -468,5 +722,118 @@ export class CsvStreamParser extends Transform {
 		}
 
 		return result;
+	}
+
+	/**
+	 * Detect duplicate headers and process them according to the strategy.
+	 */
+	private detectAndProcessDuplicateHeaders(
+		headers: string[],
+		strategy: DuplicateHeaderStrategy,
+		headerRow: number
+	): { processedHeaders: string[]; duplicateIndices: Set<number> } {
+		// Build a map of header -> list of indices
+		const headerMap = new Map<string, number[]>();
+		for (let i = 0; i < headers.length; i++) {
+			const key = headers[i];
+			const indices = headerMap.get(key) || [];
+			indices.push(i);
+			headerMap.set(key, indices);
+		}
+
+		// Find which headers have duplicates
+		const duplicateHeaders: string[] = [];
+		const duplicateIndices = new Set<number>();
+
+		for (const [_key, indices] of headerMap.entries()) {
+			if (indices.length > 1) {
+				duplicateHeaders.push(headers[indices[0]]);
+				for (const idx of indices) {
+					duplicateIndices.add(idx);
+				}
+			}
+		}
+
+		// If no duplicates, return original headers
+		if (duplicateHeaders.length === 0) {
+			return { processedHeaders: headers, duplicateIndices };
+		}
+
+		// Apply strategy
+		switch (strategy) {
+			case "error":
+				throw new CsvDuplicateHeaderError(duplicateHeaders, headerRow);
+
+			case "rename": {
+				const processedHeaders = [...headers];
+				for (const indices of headerMap.values()) {
+					if (indices.length > 1) {
+						for (let i = 1; i < indices.length; i++) {
+							const originalIdx = indices[i];
+							processedHeaders[originalIdx] = `${headers[originalIdx]}_${i}`;
+						}
+					}
+				}
+				return { processedHeaders, duplicateIndices };
+			}
+
+			case "combine":
+			case "first":
+			case "last":
+				// These strategies don't modify headers, just affect value assignment
+				return { processedHeaders: headers, duplicateIndices };
+
+			default:
+				return { processedHeaders: headers, duplicateIndices };
+		}
+	}
+
+	/**
+	 * Filter columns based on includeColumns and excludeColumns options.
+	 */
+	private filterColumns(headers: string[]): { filteredHeaders: string[]; includedIndices: number[] } {
+		const { includeColumns, excludeColumns, validationMode } = this.options;
+
+		// If no filtering specified, include all
+		if ((!includeColumns || includeColumns.length === 0) && (!excludeColumns || excludeColumns.length === 0)) {
+			return {
+				filteredHeaders: headers,
+				includedIndices: headers.map((_, i) => i),
+			};
+		}
+
+		const headerSet = new Set(headers);
+		let indicesToInclude: number[];
+
+		// Step 1: Apply includeColumns first (if specified)
+		if (includeColumns && includeColumns.length > 0) {
+			const includeSet = new Set(includeColumns);
+
+			// Warn about columns that don't exist
+			for (const col of includeColumns) {
+				if (!headerSet.has(col) && validationMode !== "ignore") {
+					const message = `Column '${col}' specified in includeColumns does not exist in the CSV headers.`;
+					if (validationMode === "warn" || validationMode === undefined) {
+						// biome-ignore lint/suspicious/noConsole: User explicitly requested warning mode
+						console.warn(`Warning: ${message}`);
+					}
+				}
+			}
+
+			indicesToInclude = headers.map((h, i) => (includeSet.has(h) ? i : -1)).filter(i => i !== -1);
+		} else {
+			// Start with all columns
+			indicesToInclude = headers.map((_, i) => i);
+		}
+
+		// Step 2: Apply excludeColumns (filter from the result)
+		if (excludeColumns && excludeColumns.length > 0) {
+			const excludeSet = new Set(excludeColumns);
+			indicesToInclude = indicesToInclude.filter(i => !excludeSet.has(headers[i]));
+		}
+
+		const filteredHeaders = indicesToInclude.map(i => headers[i]);
+
+		return { filteredHeaders, includedIndices: indicesToInclude };
 	}
 }

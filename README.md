@@ -11,6 +11,11 @@ A powerful TypeScript CSV parser that transforms flat CSV data into nested JSON 
 - **Multiple Input Methods** - Parse from files (sync/async), strings, or streams
 - **True Streaming Parser** - Memory-efficient parsing for very large files
 - **Bidirectional Conversion** - Convert CSV to JSON and JSON back to CSV
+- **Column Selection** - Include or exclude specific columns during parsing
+- **Duplicate Header Handling** - Smart strategies for duplicate column names
+- **Limit Records** - Stop parsing after N records for previews or pagination
+- **Progress Monitoring** - Track parsing progress with callbacks for large files
+- **Batch Processing** - Process records in configurable batches for memory efficiency
 - **Value Transformations** - Auto-parse numbers, booleans, dates, or use custom transformers
 - **Header Transformations** - Transform and map column names
 - **Row Filtering** - Filter rows during parsing for memory efficiency
@@ -148,6 +153,58 @@ createReadStream('./very-large-file.csv')
 ```
 
 **When to use:** Files too large to fit in memory, real-time processing, ETL pipelines.
+
+### Progress Monitoring
+
+Track parsing progress for large files:
+
+```typescript
+import { CsvStreamParser, ProgressInfo } from '@cerios/csv-nested-json';
+import { createReadStream } from 'node:fs';
+
+const parser = new CsvStreamParser({
+  progressCallback: (progress: ProgressInfo) => {
+    console.log(`Processed ${progress.recordsEmitted} records`);
+    console.log(`Bytes: ${progress.bytesProcessed}`);
+    console.log(`Elapsed: ${progress.elapsedMs}ms`);
+  },
+  progressInterval: 1000  // Call every 1000 records (default: 100)
+});
+
+for await (const record of createReadStream('./large.csv').pipe(parser)) {
+  // Process record
+}
+```
+
+The `ProgressInfo` object contains:
+- `bytesProcessed`: Total bytes read so far
+- `recordsEmitted`: Number of records emitted
+- `headersProcessed`: Whether headers have been parsed
+- `elapsedMs`: Milliseconds since parsing started
+
+### Batch Processing
+
+Process records in batches for memory-efficient streaming:
+
+```typescript
+import { CsvStreamParser } from '@cerios/csv-nested-json';
+import { createReadStream } from 'node:fs';
+
+const parser = new CsvStreamParser({
+  batchSize: 100  // Emit arrays of 100 records
+});
+
+for await (const batch of createReadStream('./large.csv').pipe(parser)) {
+  // batch is an array of up to 100 records
+  await processBatch(batch);
+}
+
+// Note: parseStream() always returns a flat array regardless of batchSize
+const allRecords = await CsvStreamParser.parseStream(
+  createReadStream('./data.csv'),
+  { batchSize: 100 }  // Batching used internally, result is flattened
+);
+```
 
 ### 6. Convert JSON to CSV
 
@@ -453,6 +510,86 @@ const result = CsvParser.parseString(csvContent, {
 // ]
 ```
 
+### Column Selection
+
+Include or exclude specific columns during parsing:
+
+```typescript
+const csvContent = `id,name,email,password,role
+1,Alice,alice@example.com,secret123,admin
+2,Bob,bob@example.com,password456,user`;
+
+// Include only specific columns
+const result1 = CsvParser.parseString(csvContent, {
+  includeColumns: ['id', 'name', 'email']
+});
+// Result: [{ id: "1", name: "Alice", email: "alice@example.com" }, ...]
+
+// Exclude sensitive columns
+const result2 = CsvParser.parseString(csvContent, {
+  excludeColumns: ['password']
+});
+// Result: [{ id: "1", name: "Alice", email: "alice@example.com", role: "admin" }, ...]
+```
+
+### Duplicate Header Handling
+
+Handle CSV files with duplicate column names:
+
+```typescript
+const csvContent = `id,name,value,value,value
+1,Test,A,B,C`;
+
+// Keep first occurrence (default)
+const result1 = CsvParser.parseString(csvContent, {
+  duplicateHeaders: 'first'
+});
+// Result: [{ id: "1", name: "Test", value: "A" }]
+
+// Keep last occurrence
+const result2 = CsvParser.parseString(csvContent, {
+  duplicateHeaders: 'last'
+});
+// Result: [{ id: "1", name: "Test", value: "C" }]
+
+// Combine into comma-separated string
+const result3 = CsvParser.parseString(csvContent, {
+  duplicateHeaders: 'combine'
+});
+// Result: [{ id: "1", name: "Test", value: "A,B,C" }]
+
+// Rename duplicates with suffix
+const result4 = CsvParser.parseString(csvContent, {
+  duplicateHeaders: 'rename'
+});
+// Result: [{ id: "1", name: "Test", value: "A", value_1: "B", value_2: "C" }]
+
+// Throw error on duplicates (default)
+const result5 = CsvParser.parseString(csvContent, {
+  duplicateHeaders: 'error'
+});
+// Throws CsvDuplicateHeaderError
+```
+
+### Limit Records
+
+Limit the number of records parsed (useful for previews or pagination):
+
+```typescript
+const csvContent = `id,name
+1,Alice
+2,Bob
+3,Charlie
+4,Diana
+5,Eve`;
+
+const result = CsvParser.parseString(csvContent, {
+  limit: 3
+});
+// Result: [{ id: "1", ... }, { id: "2", ... }, { id: "3", ... }]
+// Parsing stops after 3 records - efficient for large files
+```
+
 ### Skip Rows (Metadata Headers)
 
 ```typescript
@@ -755,6 +892,14 @@ interface CsvParserOptions {
   skipRows?: number;                              // Default: 0
   stripBom?: boolean;                             // Default: true
   rowFilter?: (record, rowIndex) => boolean;      // Filter rows during parsing
+  limit?: number;                                 // Max records to parse
+
+  // Column selection
+  includeColumns?: string[];                      // Include only these columns
+  excludeColumns?: string[];                      // Exclude these columns
+
+  // Duplicate header handling
+  duplicateHeaders?: DuplicateHeaderStrategy;     // Default: 'error'
 
   // Value transformations
   autoParseNumbers?: boolean;                     // Default: false
@@ -776,6 +921,17 @@ interface CsvParserOptions {
 
   // Default values
   defaultValues?: Record<string, string>;         // Default values for empty cells
+
+  // Row grouping
+  identifierColumn?: string;                      // Column for grouping continuation rows
+}
+
+// Streaming-specific options (CsvStreamParser)
+interface CsvStreamParserOptions extends CsvParserOptions {
+  nested?: boolean;                               // Emit nested objects (default: true)
+  batchSize?: number;                             // Emit records in batches
+  progressCallback?: ProgressCallback;            // Progress tracking callback
+  progressInterval?: number;                      // Records between callbacks (default: 100)
 }
 ```
 
@@ -865,6 +1021,53 @@ Filter rows during parsing. More memory-efficient than filtering after parsing.
 rowFilter: (record, rowIndex) => record.status === 'active'
 ```
 
+#### `limit`
+
+Maximum number of records to parse. Parsing stops after this limit is reached, which is efficient for large files when you only need a preview or first N records.
+
+```typescript
+limit: 100  // Stop after 100 records
+```
+
+#### `includeColumns`
+
+Array of column names to include. Only these columns will be in the output.
+
+```typescript
+includeColumns: ['id', 'name', 'email']  // Only include these columns
+```
+
+#### `excludeColumns`
+
+Array of column names to exclude. All other columns will be included.
+
+```typescript
+excludeColumns: ['password', 'secret']  // Exclude sensitive columns
+```
+
+#### `duplicateHeaders`
+
+Strategy for handling duplicate column names in CSV headers. Default: `'error'`
+
+```typescript
+duplicateHeaders: 'rename'  // 'error' | 'rename' | 'combine' | 'first' | 'last'
+```
+
+- `'error'` (default): Throw `CsvDuplicateHeaderError` on duplicates
+- `'rename'`: Rename duplicates with suffix (e.g., `value`, `value_1`, `value_2`)
+- `'combine'`: Combine values into comma-separated string
+- `'first'`: Keep only the first occurrence of duplicate headers
+- `'last'`: Keep only the last occurrence
+
+#### `identifierColumn`
+
+Column to use as the identifier for grouping continuation rows. By default, the first column is used to identify new records. When this column has an empty value, the row is treated as a continuation of the previous record.
+
+```typescript
+// Use 'productId' instead of first column to group rows
+identifierColumn: 'productId'
+```
+
 #### `arraySuffixIndicator`
 
 Suffix in headers to force array type. Default: `'[]'`
@@ -877,7 +1080,7 @@ How to handle forced array fields with no values:
 
 #### `nullValues`
 
-Strings to interpret as null values. Default: `['null', 'NULL', 'nil', 'NIL']`
+Strings to interpret as null values. Default: `['null', 'NULL', 'nil', 'NIL', '']`
 
 #### `nullRepresentation`
 
@@ -911,6 +1114,13 @@ const result = await CsvParser.parseFile('./data.csv', {
   skipRows: 2,
   stripBom: true,
   rowFilter: (record) => record.status !== 'deleted',
+  limit: 1000,
+
+  // Column selection
+  excludeColumns: ['password', 'secret'],
+
+  // Duplicate header handling
+  duplicateHeaders: 'rename',
 
   // Value transformations
   autoParseNumbers: true,
@@ -924,6 +1134,9 @@ const result = await CsvParser.parseFile('./data.csv', {
   // Header transformations
   headerTransformer: (h) => h.toLowerCase().replace(/\s+/g, '_'),
   columnMapping: { 'user_id': 'id' },
+
+  // Row grouping
+  identifierColumn: 'id',
 
   // Array handling
   arraySuffixIndicator: '[]',
@@ -963,11 +1176,17 @@ Parses CSV from a readable stream.
 A Transform stream that parses CSV data chunk by chunk, emitting records as they become available.
 
 ```typescript
-import { CsvStreamParser } from '@cerios/csv-nested-json';
+import { CsvStreamParser, ProgressInfo } from '@cerios/csv-nested-json';
 
 const parser = new CsvStreamParser({
   nested: true,           // Emit nested objects (default: true)
   autoParseNumbers: true,
+  limit: 1000,            // Stop after 1000 records
+  batchSize: 100,         // Emit in batches of 100
+  progressCallback: (info: ProgressInfo) => {
+    console.log(`Progress: ${info.recordsEmitted} records, ${info.elapsedMs}ms`);
+  },
+  progressInterval: 500,  // Call progress every 500 records
   // ... other CsvParserOptions
 });
 
@@ -975,6 +1194,16 @@ createReadStream('./large.csv')
   .pipe(parser)
   .on('data', (record) => console.log(record))
   .on('end', () => console.log('Done'));
+```
+
+#### Static Promise API
+
+```typescript
+// Parse stream and collect all records
+const records = await CsvStreamParser.parseStream(
+  createReadStream('./data.csv'),
+  { autoParseNumbers: true, limit: 100 }
+);
 ```
 
 ### JsonToCsv Class
@@ -1014,7 +1243,8 @@ import {
   CsvParseError,
   CsvFileNotFoundError,
   CsvValidationError,
-  CsvEncodingError
+  CsvEncodingError,
+  CsvDuplicateHeaderError
 } from '@cerios/csv-nested-json';
 
 try {
@@ -1024,6 +1254,8 @@ try {
 } catch (error) {
   if (error instanceof CsvFileNotFoundError) {
     console.error(`File not found: ${error.filePath}`);
+  } else if (error instanceof CsvDuplicateHeaderError) {
+    console.error(`Duplicate headers: ${error.duplicateHeaders.join(', ')}`);
   } else if (error instanceof CsvValidationError) {
     console.error(`Validation error at row ${error.row}`);
     console.error(`Expected ${error.expectedColumns}, got ${error.actualColumns}`);
@@ -1039,7 +1271,7 @@ try {
 
 ### 1. Row Grouping
 
-Records are grouped by the first column (identifier). When the first column is empty, the row is treated as a continuation of the previous group:
+Records are grouped by the first column (identifier) by default, or by the column specified in `identifierColumn`. When this column is empty, the row is treated as a continuation of the previous group:
 
 ```csv
 id,name,item
@@ -1200,9 +1432,13 @@ import {
   CsvStreamParser,
   JsonToCsv,
   CsvParserOptions,
+  CsvStreamParserOptions,
   CsvParseError,
   CsvValidationError,
-  NestedObject
+  NestedObject,
+  ProgressInfo,
+  ProgressCallback,
+  DuplicateHeaderOptions
 } from '@cerios/csv-nested-json';
 
 // Generic type support
@@ -1231,19 +1467,30 @@ type ValidationMode = 'ignore' | 'warn' | 'error';
 type EmptyArrayBehavior = 'empty-array' | 'omit';
 type NullRepresentation = 'null' | 'undefined' | 'empty-string' | 'omit';
 type ArrayMode = 'rows' | 'json';
+type DuplicateHeaderStrategy = 'error' | 'rename' | 'combine' | 'first' | 'last';
 
 // Function types
 type ValueTransformer = (value: unknown, header: string) => unknown;
 type HeaderTransformer = (header: string) => string;
 type RowFilter = (record: CsvRecord, rowIndex: number) => boolean;
+type ProgressCallback = (info: ProgressInfo) => void | Promise<void>;
+
+// Progress tracking
+interface ProgressInfo {
+  bytesProcessed: number;    // Total bytes read
+  recordsEmitted: number;    // Records emitted so far
+  headersProcessed: boolean; // Whether headers have been parsed
+  elapsedMs: number;         // Milliseconds since start
+}
 
 // Data types
 type CsvRecord = Record<string, string>;
 type NestedObject = { [key: string]: NestedValue };
 type NestedValue = string | number | boolean | Date | null | NestedObject | NestedValue[];
 
-// Options interface
+// Options interfaces
 interface CsvParserOptions { /* ... */ }
+interface CsvStreamParserOptions extends CsvParserOptions { /* ... */ }
 ```
 
 ## 🎯 Best Practices

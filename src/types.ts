@@ -103,6 +103,124 @@ export type RowFilter = (record: CsvRecord, rowIndex: number) => boolean;
 export type NullRepresentation = "null" | "undefined" | "empty-string" | "omit";
 
 /**
+ * Strategy for handling duplicate column headers in CSV files.
+ * - `'error'`: Throw a CsvDuplicateHeaderError (default)
+ * - `'rename'`: Rename duplicates to 'name_1', 'name_2', etc.
+ * - `'combine'`: Combine duplicate values into comma-separated string
+ * - `'first'`: Keep only the first value for duplicate columns
+ * - `'last'`: Keep only the last value for duplicate columns
+ */
+export type DuplicateHeaderStrategy = "error" | "rename" | "combine" | "first" | "last";
+
+/**
+ * Information about parsing progress, passed to progress callbacks.
+ */
+export interface ProgressInfo {
+	/**
+	 * Total number of bytes processed so far.
+	 */
+	bytesProcessed: number;
+
+	/**
+	 * Number of records emitted so far.
+	 */
+	recordsEmitted: number;
+
+	/**
+	 * Whether the header row has been processed.
+	 */
+	headersProcessed: boolean;
+
+	/**
+	 * Time elapsed since parsing started, in milliseconds.
+	 */
+	elapsedMs: number;
+}
+
+/**
+ * Callback function for progress updates during streaming parsing.
+ * Can be synchronous or asynchronous. Async callbacks are fire-and-forget
+ * (parsing does not wait for them to complete).
+ *
+ * @param info - Current progress information
+ *
+ * @example
+ * ```typescript
+ * const callback: ProgressCallback = (info) => {
+ *   console.log(`Parsed ${info.recordsEmitted} records in ${info.elapsedMs}ms`);
+ * };
+ * ```
+ */
+export type ProgressCallback = (info: ProgressInfo) => void | Promise<void>;
+
+/**
+ * Hierarchy structure for forced array fields.
+ * Tracks parent/child relationships between forced array paths to enable
+ * context-aware merging of continuation rows.
+ *
+ * @internal
+ */
+export interface ForcedArrayHierarchy {
+	/**
+	 * Map of forced array path → its parent forced array path (or null if root-level)
+	 * Example: { "items": null, "items.tags": "items" }
+	 */
+	parentMap: Map<string, string | null>;
+
+	/**
+	 * Map of forced array path → all child forced array paths
+	 * Example: { "items": Set(["items.tags"]), "items.tags": Set() }
+	 */
+	childrenMap: Map<string, Set<string>>;
+
+	/**
+	 * Map of forced array path → non-array sibling fields at that level
+	 * These are fields that, when populated, indicate a new array item should be created
+	 * Example: { "items": Set(["name", "id"]) } where name/id are siblings to tags under items
+	 */
+	siblingFieldsMap: Map<string, Set<string>>;
+
+	/**
+	 * List of forced array paths sorted by depth (ascending)
+	 * Example: ["items", "items.tags"]
+	 */
+	sortedByDepth: string[];
+}
+
+/**
+ * Context for a single row during merge operations.
+ * Tracks which fields have values and determines merge behavior.
+ *
+ * @internal
+ */
+export interface RowContext {
+	/**
+	 * Set of normalized paths that have non-empty values in this row
+	 */
+	populatedPaths: Set<string>;
+
+	/**
+	 * For each forced array path, whether its non-array sibling fields have values
+	 * When true, a new array item should be created at that level
+	 */
+	hasSiblingValues: Map<string, boolean>;
+}
+
+/**
+ * State maintained during merge operations.
+ * Tracks the last item added to each forced array for appending nested values.
+ *
+ * @internal
+ */
+export interface MergeState {
+	/**
+	 * For each forced array path, reference to the last item in that array.
+	 * Used to append nested array values to the correct parent item.
+	 */
+	lastItemByPath: Map<string, NestedObject>;
+}
+
+/**
  * Configuration options for CSV parsing and conversion.
  *
  * @example
@@ -333,4 +451,79 @@ export interface CsvParserOptions {
 	 * @default 'omit'
 	 */
 	nullRepresentation?: NullRepresentation;
+
+	/**
+	 * Maximum number of records to parse.
+	 * Parsing stops after this limit is reached.
+	 * Useful for previewing large files or pagination.
+	 *
+	 * @example
+	 * ```typescript
+	 * // Only parse first 100 records
+	 * CsvParser.parseString(csv, { limit: 100 });
+	 * ```
+	 */
+	limit?: number;
+
+	/**
+	 * List of column names to include in the output.
+	 * Only these columns will be present in parsed records.
+	 * Cannot be used together with excludeColumns.
+	 *
+	 * @example
+	 * ```typescript
+	 * CsvParser.parseString(csv, {
+	 *   includeColumns: ['id', 'name', 'email']
+	 * });
+	 * ```
+	 */
+	includeColumns?: string[];
+
+	/**
+	 * List of column names to exclude from the output.
+	 * All columns except these will be present in parsed records.
+	 * Cannot be used together with includeColumns.
+	 *
+	 * @example
+	 * ```typescript
+	 * CsvParser.parseString(csv, {
+	 *   excludeColumns: ['password', 'secret']
+	 * });
+	 * ```
+	 */
+	excludeColumns?: string[];
+
+	/**
+	 * Strategy for handling duplicate column headers.
+	 * - `'error'`: Throw a CsvDuplicateHeaderError (default)
+	 * - `'rename'`: Rename duplicates to 'name_1', 'name_2', etc.
+	 * - `'combine'`: Combine duplicate values into comma-separated string
+	 * - `'first'`: Keep only the first value for duplicate columns
+	 * - `'last'`: Keep only the last value for duplicate columns
+	 * @default 'error'
+	 *
+	 * @example
+	 * ```typescript
+	 * CsvParser.parseString(csv, {
+	 *   duplicateHeaders: 'rename'
+	 * });
+	 * ```
+	 */
+	duplicateHeaders?: DuplicateHeaderStrategy;
+
+	/**
+	 * Column to use as the identifier for grouping continuation rows.
+	 * By default, the first column is used to identify new records.
+	 * When this column has an empty value, the row is treated as a continuation
+	 * of the previous record.
+	 *
+	 * @example
+	 * ```typescript
+	 * // Use 'productId' instead of first column to group rows
+	 * CsvParser.parseString(csv, {
+	 *   identifierColumn: 'productId'
+	 * });
+	 * ```
+	 */
+	identifierColumn?: string;
 }

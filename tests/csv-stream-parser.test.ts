@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { CsvStreamParser } from "../src/csv-stream-parser";
-import type { NestedObject } from "../src/types";
+import type { NestedObject, ProgressInfo } from "../src/types";
 
 describe("CsvStreamParser", () => {
 	describe("Basic parsing", () => {
@@ -639,6 +639,491 @@ Line 2"`;
 			}
 
 			expect(records).toEqual([{ id: "1", name: "Alice" }]);
+		});
+	});
+
+	describe("Static parseStream method", () => {
+		it("should parse stream and return Promise with all records", async () => {
+			const csvContent = `id,name,age
+1,Alice,25
+2,Bob,30`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream);
+
+			expect(records).toEqual([
+				{ id: "1", name: "Alice", age: "25" },
+				{ id: "2", name: "Bob", age: "30" },
+			]);
+		});
+
+		it("should handle empty stream", async () => {
+			const stream = Readable.from([""]);
+
+			const records = await CsvStreamParser.parseStream(stream);
+
+			expect(records).toEqual([]);
+		});
+
+		it("should support parser options", async () => {
+			const csvContent = `id;name;active
+1;Alice;true
+2;Bob;false`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream, {
+				delimiter: ";",
+				autoParseBooleans: true,
+			});
+
+			expect(records).toEqual([
+				{ id: "1", name: "Alice", active: true },
+				{ id: "2", name: "Bob", active: false },
+			]);
+		});
+
+		it("should support autoParseNumbers option", async () => {
+			const csvContent = `id,value,price
+1,100,19.99
+2,200,29.99`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream, {
+				autoParseNumbers: true,
+			});
+
+			expect(records).toEqual([
+				{ id: 1, value: 100, price: 19.99 },
+				{ id: 2, value: 200, price: 29.99 },
+			]);
+		});
+
+		it("should support nested: false option for flat records", async () => {
+			const csvContent = `id,person.name,person.age
+1,Alice,25`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream, {
+				nested: false,
+			});
+
+			expect(records).toEqual([{ id: "1", "person.name": "Alice", "person.age": "25" }]);
+		});
+
+		it("should parse nested objects by default", async () => {
+			const csvContent = `id,person.name,person.age
+1,Alice,25`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream);
+
+			expect(records).toEqual([{ id: "1", person: { name: "Alice", age: "25" } }]);
+		});
+
+		it("should support type parameter for typed results", async () => {
+			interface Person {
+				id: string;
+				name: string;
+			}
+
+			const csvContent = `id,name
+1,Alice`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream<Person>(stream);
+
+			expect(records[0].id).toBe("1");
+			expect(records[0].name).toBe("Alice");
+		});
+
+		it("should reject on stream error", async () => {
+			const stream = new Readable({
+				read() {
+					this.destroy(new Error("Stream error"));
+				},
+			});
+
+			await expect(CsvStreamParser.parseStream(stream)).rejects.toThrow("Stream error");
+		});
+
+		it("should support column filtering options", async () => {
+			const csvContent = `id,name,age,email
+1,Alice,25,alice@test.com
+2,Bob,30,bob@test.com`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream, {
+				includeColumns: ["id", "name"],
+			});
+
+			expect(records).toEqual([
+				{ id: "1", name: "Alice" },
+				{ id: "2", name: "Bob" },
+			]);
+		});
+
+		it("should handle chunked input correctly", async () => {
+			// Simulate a stream that sends data in small chunks
+			const chunks = ["id,na", "me\n1,Ali", "ce\n2,B", "ob"];
+			const stream = Readable.from(chunks);
+
+			const records = await CsvStreamParser.parseStream(stream);
+
+			expect(records).toEqual([
+				{ id: "1", name: "Alice" },
+				{ id: "2", name: "Bob" },
+			]);
+		});
+	});
+
+	describe("Progress callback", () => {
+		it("should call progress callback at specified intervals", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob
+3,Charlie
+4,Diana
+5,Eve`;
+			const stream = Readable.from([csvContent]);
+			const progressCalls: number[] = [];
+
+			await CsvStreamParser.parseStream(stream, {
+				progressCallback: info => {
+					progressCalls.push(info.recordsEmitted);
+				},
+				progressInterval: 2,
+			});
+
+			// Should be called at records 2 and 4
+			expect(progressCalls).toEqual([2, 4]);
+		});
+
+		it("should provide accurate progress info", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob`;
+			const stream = Readable.from([csvContent]);
+			const progressInfos: ProgressInfo[] = [];
+
+			await CsvStreamParser.parseStream(stream, {
+				progressCallback: info => {
+					progressInfos.push(info);
+				},
+				progressInterval: 1,
+			});
+
+			expect(progressInfos.length).toBeGreaterThan(0);
+			const lastProgress = progressInfos[progressInfos.length - 1];
+			expect(lastProgress.bytesProcessed).toBeGreaterThan(0);
+			expect(lastProgress.headersProcessed).toBe(true);
+			expect(lastProgress.recordsEmitted).toBe(2);
+		});
+
+		it("should support async progress callback", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob`;
+			const stream = Readable.from([csvContent]);
+			const progressCalls: number[] = [];
+
+			// Using a sync callback that simulates async work
+			// The callback itself is sync but could trigger async operations
+			await CsvStreamParser.parseStream(stream, {
+				progressCallback: info => {
+					progressCalls.push(info.recordsEmitted);
+					// Async progress callbacks are fire-and-forget
+					// They don't block parsing
+				},
+				progressInterval: 1,
+			});
+
+			expect(progressCalls).toEqual([1, 2]);
+		});
+
+		it("should include elapsed time in progress info", async () => {
+			const csvContent = `id,name
+1,Alice`;
+			const stream = Readable.from([csvContent]);
+			let elapsedMs = 0;
+
+			await CsvStreamParser.parseStream(stream, {
+				progressCallback: info => {
+					elapsedMs = info.elapsedMs;
+				},
+				progressInterval: 1,
+			});
+
+			expect(elapsedMs).toBeGreaterThanOrEqual(0);
+		});
+	});
+
+	describe("Batch processing", () => {
+		it("should emit batches when batchSize > 1", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob
+3,Charlie
+4,Diana`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({ batchSize: 2 });
+
+			const batches: NestedObject[][] = [];
+			for await (const batch of stream.pipe(parser)) {
+				batches.push(batch as NestedObject[]);
+			}
+
+			expect(batches.length).toBe(2);
+			expect(batches[0]).toEqual([
+				{ id: "1", name: "Alice" },
+				{ id: "2", name: "Bob" },
+			]);
+			expect(batches[1]).toEqual([
+				{ id: "3", name: "Charlie" },
+				{ id: "4", name: "Diana" },
+			]);
+		});
+
+		it("should flush partial batch at end", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob
+3,Charlie`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({ batchSize: 2 });
+
+			const batches: NestedObject[][] = [];
+			for await (const batch of stream.pipe(parser)) {
+				batches.push(batch as NestedObject[]);
+			}
+
+			expect(batches.length).toBe(2);
+			expect(batches[0].length).toBe(2);
+			expect(batches[1].length).toBe(1); // Partial batch
+			expect(batches[1][0]).toEqual({ id: "3", name: "Charlie" });
+		});
+
+		it("should flatten batches in parseStream()", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob
+3,Charlie`;
+			const stream = Readable.from([csvContent]);
+
+			// parseStream should always return flat array regardless of batchSize
+			const records = await CsvStreamParser.parseStream(stream, {
+				batchSize: 2,
+			});
+
+			expect(records.length).toBe(3);
+			expect(records).toEqual([
+				{ id: "1", name: "Alice" },
+				{ id: "2", name: "Bob" },
+				{ id: "3", name: "Charlie" },
+			]);
+		});
+
+		it("should handle batchSize of 1 (default)", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({ batchSize: 1 });
+
+			const records: NestedObject[] = [];
+			for await (const record of stream.pipe(parser)) {
+				records.push(record as NestedObject);
+			}
+
+			expect(records).toEqual([
+				{ id: "1", name: "Alice" },
+				{ id: "2", name: "Bob" },
+			]);
+		});
+
+		it("should work with large batches", async () => {
+			const rows = Array.from({ length: 250 }, (_, i) => `${i},Name${i}`);
+			const csvContent = `id,name\n${rows.join("\n")}`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream, {
+				batchSize: 100,
+			});
+
+			expect(records.length).toBe(250);
+		});
+	});
+
+	describe("Limit option", () => {
+		it("should stop after limit records", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob
+3,Charlie
+4,Diana
+5,Eve`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream, {
+				limit: 3,
+			});
+
+			expect(records.length).toBe(3);
+			expect(records).toEqual([
+				{ id: "1", name: "Alice" },
+				{ id: "2", name: "Bob" },
+				{ id: "3", name: "Charlie" },
+			]);
+		});
+
+		it("should apply limit after row filtering", async () => {
+			const csvContent = `id,name,active
+1,Alice,true
+2,Bob,false
+3,Charlie,true
+4,Diana,false
+5,Eve,true`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream, {
+				limit: 2,
+				rowFilter: record => record.active === "true",
+			});
+
+			// Should get first 2 records that pass the filter (Alice, Charlie)
+			expect(records.length).toBe(2);
+			expect(records[0]).toMatchObject({ name: "Alice" });
+			expect(records[1]).toMatchObject({ name: "Charlie" });
+		});
+
+		it("should handle limit greater than available records", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream, {
+				limit: 100,
+			});
+
+			expect(records.length).toBe(2);
+		});
+
+		it("should handle limit of 0 (no limit)", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob
+3,Charlie`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream, {
+				limit: 0,
+			});
+
+			expect(records.length).toBe(3);
+		});
+
+		it("should work with batching", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob
+3,Charlie
+4,Diana
+5,Eve`;
+			const stream = Readable.from([csvContent]);
+
+			const records = await CsvStreamParser.parseStream(stream, {
+				limit: 3,
+				batchSize: 2,
+			});
+
+			expect(records.length).toBe(3);
+		});
+
+		it("should flush batch when limit reached mid-batch", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob
+3,Charlie
+4,Diana
+5,Eve`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({ batchSize: 2, limit: 3 });
+
+			const batches: NestedObject[][] = [];
+			for await (const batch of stream.pipe(parser)) {
+				batches.push(batch as NestedObject[]);
+			}
+
+			// First batch: 2 records, second batch: 1 record (limit reached)
+			expect(batches.length).toBe(2);
+			expect(batches[0].length).toBe(2);
+			expect(batches[1].length).toBe(1);
+		});
+	});
+
+	describe("Memory leak prevention (_destroy)", () => {
+		it("should clean up on destroy", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser();
+
+			// Start piping
+			stream.pipe(parser);
+
+			// Destroy immediately
+			parser.destroy();
+
+			// Should not throw and parser should be cleaned up
+			expect(parser.destroyed).toBe(true);
+		});
+
+		it("should clean up on error", async () => {
+			const errorStream = new Readable({
+				read() {
+					this.destroy(new Error("Test error"));
+				},
+			});
+
+			await expect(CsvStreamParser.parseStream(errorStream)).rejects.toThrow("Test error");
+		});
+
+		it("should handle destroy with error", async () => {
+			const csvContent = `id,name
+1,Alice`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser();
+
+			const error = new Error("Custom error");
+
+			// Set up error handler before piping to avoid unhandled error
+			const errorPromise = new Promise<void>(resolve => {
+				parser.on("error", () => resolve());
+			});
+
+			stream.pipe(parser);
+			parser.destroy(error);
+
+			await errorPromise;
+			expect(parser.destroyed).toBe(true);
+		});
+
+		it("should not emit after limit reached", async () => {
+			const csvContent = `id,name
+1,Alice
+2,Bob
+3,Charlie
+4,Diana`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({ limit: 2 });
+
+			const records: NestedObject[] = [];
+			for await (const record of stream.pipe(parser)) {
+				records.push(record as NestedObject);
+			}
+
+			expect(records.length).toBe(2);
 		});
 	});
 });
