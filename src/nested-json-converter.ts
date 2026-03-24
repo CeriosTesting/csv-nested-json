@@ -133,8 +133,15 @@ export class NestedJsonConverter {
 		records: CsvRecord[],
 		options: CsvParserOptions
 	): Record<string, string | number | boolean | Date | null | undefined>[] {
-		const { autoParseNumbers, autoParseBooleans, autoParseDates, valueTransformer, nullValues, nullRepresentation } =
-			options;
+		const {
+			autoParseNumbers,
+			preserveUnsafeIntegersAsString,
+			autoParseBooleans,
+			autoParseDates,
+			valueTransformer,
+			nullValues,
+			nullRepresentation,
+		} = options;
 
 		// Default null values
 		const nullSet = new Set((nullValues ?? ["null", "NULL", "nil", "NIL"]).map(v => v.toLowerCase()));
@@ -175,7 +182,7 @@ export class NestedJsonConverter {
 
 				// Step 1: Auto-parse numbers
 				if (autoParseNumbers) {
-					const parsed = this.tryParseNumber(value);
+					const parsed = this.tryParseNumber(value, preserveUnsafeIntegersAsString);
 					if (parsed !== null) {
 						transformedValue = parsed;
 					}
@@ -235,7 +242,7 @@ export class NestedJsonConverter {
 	 * Try to parse a string as a number.
 	 * Returns null if the string is not a valid number.
 	 */
-	private static tryParseNumber(value: string): number | null {
+	private static tryParseNumber(value: string, preserveUnsafeIntegersAsString?: boolean): number | string | null {
 		// Don't parse empty strings or whitespace-only
 		if (value.trim() === "") return null;
 
@@ -247,6 +254,9 @@ export class NestedJsonConverter {
 
 		// Check if it's a valid finite number
 		if (!Number.isNaN(parsed) && Number.isFinite(parsed)) {
+			if (preserveUnsafeIntegersAsString && /^-?\d+$/.test(value) && !Number.isSafeInteger(parsed)) {
+				return value;
+			}
 			return parsed;
 		}
 

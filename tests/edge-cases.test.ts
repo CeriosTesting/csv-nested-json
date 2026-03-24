@@ -283,6 +283,36 @@ describe("Edge Cases", () => {
 			expect(result[1].code).toBe("00123");
 		});
 
+		it("should preserve unsafe integers as strings when configured", () => {
+			const csv = "id,big\n1,9007199254740993";
+			const result = CsvParser.parseString(csv, {
+				autoParseNumbers: true,
+				preserveUnsafeIntegersAsString: true,
+			});
+
+			expect(result[0].big).toBe("9007199254740993");
+			expect(typeof result[0].big).toBe("string");
+		});
+
+		it("should keep current behavior for unsafe integers by default", () => {
+			const csv = "id,big\n1,9007199254740993";
+			const result = CsvParser.parseString(csv, { autoParseNumbers: true });
+
+			expect(typeof result[0].big).toBe("number");
+			expect(String(result[0].big)).toBe("9007199254740992");
+		});
+
+		it("should still parse safe integers as numbers with unsafe-integer preservation enabled", () => {
+			const csv = "id,count\n1,9007199254740991";
+			const result = CsvParser.parseString(csv, {
+				autoParseNumbers: true,
+				preserveUnsafeIntegersAsString: true,
+			});
+
+			expect(result[0].count).toBe(9007199254740991);
+			expect(typeof result[0].count).toBe("number");
+		});
+
 		it("should auto-parse booleans (case-insensitive)", () => {
 			const csv = "id,active,verified\n1,true,FALSE\n2,True,false";
 			const result = CsvParser.parseString(csv, { autoParseBooleans: true });

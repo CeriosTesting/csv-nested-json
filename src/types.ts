@@ -317,6 +317,16 @@ export interface CsvParserOptions {
 	autoParseNumbers?: boolean;
 
 	/**
+	 * Preserve integer values outside JavaScript safe integer range as strings.
+	 * Helps prevent precision loss when autoParseNumbers is enabled.
+	 * @default false
+	 *
+	 * @remarks
+	 * Only applies to whole numbers where `Math.abs(Number(value)) > Number.MAX_SAFE_INTEGER`.
+	 */
+	preserveUnsafeIntegersAsString?: boolean;
+
+	/**
 	 * Automatically convert 'true'/'false' strings to booleans.
 	 * Case-insensitive matching.
 	 * @default false
