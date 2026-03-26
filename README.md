@@ -903,6 +903,7 @@ interface CsvParserOptions {
 
   // Value transformations
   autoParseNumbers?: boolean;                     // Default: false
+  preserveUnsafeIntegersAsString?: boolean;       // Default: false
   autoParseBooleans?: boolean;                    // Default: false
   autoParseDates?: boolean;                       // Default: false
   valueTransformer?: (value, header) => any;      // Custom value transformer
@@ -977,6 +978,22 @@ Automatically remove BOM (Byte Order Mark) from the beginning of content. Defaul
 #### `autoParseNumbers`
 
 Automatically convert numeric strings to numbers. Strings with leading zeros (like `"007"`) are preserved.
+
+Note: JavaScript numbers lose integer precision above `Number.MAX_SAFE_INTEGER` (`9007199254740991`).
+If you want to prevent precision loss for large integers, enable `preserveUnsafeIntegersAsString`.
+
+#### `preserveUnsafeIntegersAsString`
+
+When used with `autoParseNumbers`, keeps integers outside JavaScript's safe integer range as strings.
+
+```typescript
+const result = CsvParser.parseString(csv, {
+  autoParseNumbers: true,
+  preserveUnsafeIntegersAsString: true
+});
+
+// "9007199254740993" stays a string to avoid precision loss
+```
 
 #### `autoParseBooleans`
 

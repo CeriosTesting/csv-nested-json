@@ -557,8 +557,15 @@ export class CsvStreamParser extends Transform {
 	private applyTransformations(
 		record: Record<string, string>
 	): Record<string, string | number | boolean | Date | null | undefined> {
-		const { autoParseNumbers, autoParseBooleans, autoParseDates, valueTransformer, nullValues, nullRepresentation } =
-			this.options;
+		const {
+			autoParseNumbers,
+			preserveUnsafeIntegersAsString,
+			autoParseBooleans,
+			autoParseDates,
+			valueTransformer,
+			nullValues,
+			nullRepresentation,
+		} = this.options;
 
 		if (!autoParseNumbers && !autoParseBooleans && !autoParseDates && !valueTransformer && nullValues === undefined) {
 			return record;
@@ -594,7 +601,7 @@ export class CsvStreamParser extends Transform {
 
 			// Auto-parse numbers
 			if (autoParseNumbers) {
-				const parsed = this.tryParseNumber(value);
+				const parsed = this.tryParseNumber(value, preserveUnsafeIntegersAsString);
 				if (parsed !== null) {
 					transformedValue = parsed;
 				}
@@ -652,12 +659,15 @@ export class CsvStreamParser extends Transform {
 	/**
 	 * Try to parse a string as a number.
 	 */
-	private tryParseNumber(value: string): number | null {
+	private tryParseNumber(value: string, preserveUnsafeIntegersAsString?: boolean): number | string | null {
 		if (value.trim() === "") return null;
 		if (/^0\d+$/.test(value)) return null;
 
 		const parsed = Number(value);
 		if (!Number.isNaN(parsed) && Number.isFinite(parsed)) {
+			if (preserveUnsafeIntegersAsString && /^-?\d+$/.test(value) && !Number.isSafeInteger(parsed)) {
+				return value;
+			}
 			return parsed;
 		}
 		return null;

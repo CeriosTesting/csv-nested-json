@@ -252,6 +252,38 @@ id,name,age
 			expect(records).toEqual([{ id: 1, code: "007" }]);
 		});
 
+		it("should preserve unsafe integers as strings when configured", async () => {
+			const csvContent = `id,big
+1,9007199254740993`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({
+				autoParseNumbers: true,
+				preserveUnsafeIntegersAsString: true,
+			});
+
+			const records: NestedObject[] = [];
+			for await (const record of stream.pipe(parser)) {
+				records.push(record as NestedObject);
+			}
+
+			expect(records).toEqual([{ id: 1, big: "9007199254740993" }]);
+		});
+
+		it("should keep current behavior for unsafe integers by default", async () => {
+			const csvContent = `id,big
+1,9007199254740993`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({ autoParseNumbers: true });
+
+			const records: NestedObject[] = [];
+			for await (const record of stream.pipe(parser)) {
+				records.push(record as NestedObject);
+			}
+
+			expect(typeof records[0].big).toBe("number");
+			expect(String(records[0].big)).toBe("9007199254740992");
+		});
+
 		it("should auto-parse booleans when enabled", async () => {
 			const csvContent = `id,active,verified
 1,true,FALSE`;
