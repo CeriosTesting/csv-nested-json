@@ -119,6 +119,19 @@ describe("CsvReader", () => {
 				},
 			]);
 		});
+
+		it("should handle custom quote character with newlines", () => {
+			const content = "id,name,bio\n1,Alice,'Line 1\nLine 2\nLine 3'";
+			const result = CsvReader.parse(content, { quote: "'" });
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					name: "Alice",
+					bio: "Line 1\nLine 2\nLine 3",
+				},
+			]);
+		});
 	});
 
 	describe("parse - line endings", () => {
@@ -233,6 +246,12 @@ describe("CsvReader", () => {
 			const content = 'line1,"text\nwith\nnewlines",line2';
 			const result = CsvReader.splitLines(content);
 			expect(result).toEqual(['line1,"text\nwith\nnewlines",line2']);
+		});
+
+		it("should not split custom-quoted text with newlines", () => {
+			const content = "line1,'text\nwith\nnewlines',line2";
+			const result = CsvReader.splitLines(content, "'");
+			expect(result).toEqual(["line1,'text\nwith\nnewlines',line2"]);
 		});
 
 		it("should handle empty content", () => {

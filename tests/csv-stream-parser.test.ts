@@ -210,18 +210,18 @@ id,name,age
 			expect(records).toEqual([{ id: "1", name: "Alice", age: "25" }]);
 		});
 
-		it("should emit flat records when nested is false", async () => {
+		it("should parse nested records with dot notation in options flow", async () => {
 			const csvContent = `id,person.name,person.age
 1,Alice,25`;
 			const stream = Readable.from([csvContent]);
-			const parser = new CsvStreamParser({ nested: false });
+			const parser = new CsvStreamParser();
 
-			const records: Record<string, string>[] = [];
+			const records: NestedObject[] = [];
 			for await (const record of stream.pipe(parser)) {
-				records.push(record as Record<string, string>);
+				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", "person.name": "Alice", "person.age": "25" }]);
+			expect(records).toEqual([{ id: "1", person: { name: "Alice", age: "25" } }]);
 		});
 
 		it("should auto-parse numbers when enabled", async () => {
@@ -523,7 +523,7 @@ Line 2"`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", tags: "javascript" }]);
+			expect(records).toEqual([{ id: "1", tags: ["javascript"] }]);
 		});
 
 		it("should use custom array suffix indicator", async () => {
@@ -537,7 +537,7 @@ Line 2"`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", tags: "javascript" }]);
+			expect(records).toEqual([{ id: "1", tags: ["javascript"] }]);
 		});
 
 		it("should handle nested paths with array suffix", async () => {
@@ -551,7 +551,111 @@ Line 2"`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", person: { skills: "typescript" } }]);
+			expect(records).toEqual([{ id: "1", person: { skills: ["typescript"] } }]);
+		});
+	});
+
+	describe("Continuation row grouping", () => {
+		it("should group continuation rows by default", async () => {
+			const csvContent = `id,items[].name,items[].tags[]
+1,item1,tag1
+,,tag2
+,,tag3
+,item2,tag4`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser();
+
+			const records: NestedObject[] = [];
+			for await (const record of stream.pipe(parser)) {
+				records.push(record as NestedObject);
+			}
+
+			expect(records).toEqual([
+				{
+					id: "1",
+					items: [
+						{ name: "item1", tags: ["tag1", "tag2", "tag3"] },
+						{ name: "item2", tags: ["tag4"] },
+					],
+				},
+			]);
+		});
+
+		it("should group continuation rows when batching is enabled", async () => {
+			const csvContent = `id,items[].name,items[].tags[]
+1,item1,tag1
+,,tag2
+
+2,item2,tag3
+,,tag4`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({ batchSize: 2 });
+
+			const batches: NestedObject[][] = [];
+			for await (const batch of stream.pipe(parser)) {
+				batches.push(batch as NestedObject[]);
+			}
+
+			expect(batches).toEqual([
+				[
+					{ id: "1", items: [{ name: "item1", tags: ["tag1", "tag2"] }] },
+					{ id: "2", items: [{ name: "item2", tags: ["tag3", "tag4"] }] },
+				],
+			]);
+		});
+
+		it("should respect identifierColumn in grouped mode", async () => {
+			const csvContent = `group,id,values[]
+g1,1,a
+,,b
+g1,2,c`;
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({ identifierColumn: "id" });
+
+			const records: NestedObject[] = [];
+			for await (const record of stream.pipe(parser)) {
+				records.push(record as NestedObject);
+			}
+
+			expect(records).toEqual([
+				{ group: "g1", id: "1", values: ["a", "b"] },
+				{ group: "g1", id: "2", values: ["c"] },
+			]);
+		});
+
+		it("should throw when first data row is a continuation row", async () => {
+			const csvContent = `id,values[]
+,a
+1,b`;
+			const stream = Readable.from([csvContent]);
+
+			await expect(CsvStreamParser.parseStream(stream)).rejects.toThrow("continuation row, but no base row exists");
+		});
+
+		it("should throw when all columns are filtered out", async () => {
+			const csvContent = `id,name
+1,Alice`;
+			const stream = Readable.from([csvContent]);
+
+			await expect(
+				CsvStreamParser.parseStream(stream, {
+					includeColumns: ["missing"],
+				})
+			).rejects.toThrow("No columns available after filtering");
+		});
+
+		it("should enforce maxContinuationGroupSize", async () => {
+			const csvContent = `id,values[]
+1,a
+,b
+,c`;
+			const stream = Readable.from([csvContent]);
+
+			await expect(
+				CsvStreamParser.parseStream(stream, {
+					maxContinuationGroupSize: 2,
+				})
+			).rejects.toThrow("Continuation group exceeded maxContinuationGroupSize (2)");
 		});
 	});
 
@@ -570,19 +674,12 @@ Line 2"`;
 			expect(records).toEqual([{ id: "1", name: "Alice" }]);
 		});
 
-		it("should handle row with all empty values", async () => {
+		it("should throw when row with all empty values starts a group", async () => {
 			const csvContent = `id,name,email
 ,,`;
-			const stream = Readable.from([csvContent]);
-			const parser = new CsvStreamParser();
-
-			const records: NestedObject[] = [];
-			for await (const record of stream.pipe(parser)) {
-				records.push(record as NestedObject);
-			}
-
-			// All empty values result in empty object
-			expect(records).toEqual([{}]);
+			await expect(CsvStreamParser.parseStream(Readable.from([csvContent]))).rejects.toThrow(
+				"continuation row, but no base row exists"
+			);
 		});
 	});
 
@@ -730,16 +827,19 @@ Line 2"`;
 			]);
 		});
 
-		it("should support nested: false option for flat records", async () => {
-			const csvContent = `id,person.name,person.age
-1,Alice,25`;
+		it("should group continuation rows in parseStream API", async () => {
+			const csvContent = `id,tags[]
+1,a
+,b
+2,c`;
 			const stream = Readable.from([csvContent]);
 
-			const records = await CsvStreamParser.parseStream(stream, {
-				nested: false,
-			});
+			const records = await CsvStreamParser.parseStream(stream);
 
-			expect(records).toEqual([{ id: "1", "person.name": "Alice", "person.age": "25" }]);
+			expect(records).toEqual([
+				{ id: "1", tags: ["a", "b"] },
+				{ id: "2", tags: ["c"] },
+			]);
 		});
 
 		it("should parse nested objects by default", async () => {

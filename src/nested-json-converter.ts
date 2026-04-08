@@ -1,3 +1,4 @@
+import { CsvParseError } from "./errors";
 import type {
 	CsvParserOptions,
 	CsvRecord,
@@ -81,28 +82,47 @@ export class NestedJsonConverter {
 		// Apply value transformations
 		const transformedRecords = this.applyValueTransformations(normalizedRecords, options);
 
-		// Determine identifier column: use specified column or default to first
-		const identifierColumn = options.identifierColumn ?? Object.keys(transformedRecords[0])[0];
-
-		// Validate that identifierColumn exists
-		if (transformedRecords.length > 0 && !(identifierColumn in transformedRecords[0])) {
-			// Fall back to first key if specified column doesn't exist
-			// (this handles cases where the column was filtered out)
+		// Determine identifier column from available normalized columns.
+		// A configured identifierColumn must exist, otherwise grouping semantics are ambiguous.
+		const availableColumns = Object.keys(normalizedRecords[0] ?? {});
+		if (availableColumns.length === 0) {
+			throw new CsvParseError(
+				"No columns available after filtering. Cannot resolve identifier column for continuation row grouping."
+			);
 		}
+
+		const configuredIdentifier = options.identifierColumn;
+		if (configuredIdentifier && !availableColumns.includes(configuredIdentifier)) {
+			throw new CsvParseError(
+				`identifierColumn '${configuredIdentifier}' not found in headers. Available columns: ${availableColumns.join(", ")}`
+			);
+		}
+
+		const identifierColumn = configuredIdentifier ?? availableColumns[0];
 
 		// Group by the identifier column
 		const groups: NestedObject[][] = [];
 		let currentGroup: NestedObject[] = [];
 
-		for (const row of transformedRecords) {
+		for (let rowIndex = 0; rowIndex < transformedRecords.length; rowIndex++) {
+			const row = transformedRecords[rowIndex];
 			const identifierValue = row[identifierColumn];
+			const hasIdentifierValue =
+				identifierValue !== undefined && identifierValue !== null && String(identifierValue).trim() !== "";
+
 			// Check if the identifier column has a value
-			if (identifierValue && String(identifierValue).trim() !== "") {
+			if (hasIdentifierValue) {
 				if (currentGroup.length > 0) {
 					groups.push(currentGroup);
 				}
 				currentGroup = [row as NestedObject];
 			} else {
+				if (currentGroup.length === 0) {
+					throw new CsvParseError(
+						`Row ${rowIndex + 1} is a continuation row, but no base row exists. Column '${identifierColumn}' must have a value to start a group.`
+					);
+				}
+
 				currentGroup.push(row as NestedObject);
 			}
 		}
@@ -735,8 +755,28 @@ export class NestedJsonConverter {
 				const sourceData = this.getValueAtPath(source, arrayPath);
 				if (sourceData === undefined) continue;
 
-				if (parentPath === null || !createNewItemAt.has(parentPath)) {
-					// Root-level array or parent isn't creating new - add to target directly
+				if (parentPath !== null && !createNewItemAt.has(parentPath)) {
+					// Parent is an existing item; append to the child array under that parent item,
+					// not at the root target path.
+					const lastParentItem = this.getLastArrayItemAtPath(target, parentPath, mergeState);
+					if (!lastParentItem) continue;
+
+					const relativePath = arrayPath.slice(parentPath.length + 1);
+					const nestedArray = this.ensureArrayAtPathRelative(lastParentItem, relativePath);
+					const newItem =
+						typeof sourceData === "object" && !Array.isArray(sourceData) ? sourceData : { value: sourceData };
+
+					nestedArray.push(newItem as NestedValue);
+					mergeState.lastItemByPath.set(arrayPath, newItem as NestedObject);
+
+					if (typeof newItem === "object" && newItem !== null) {
+						this.trackLastItems(newItem as NestedObject, arrayPath, mergeState, forcedArrayFields);
+					}
+					continue;
+				}
+
+				if (parentPath === null) {
+					// Root-level array - add directly to target.
 					const targetArray = this.ensureArrayAtPath(target, arrayPath);
 					const newItem =
 						typeof sourceData === "object" && !Array.isArray(sourceData) ? sourceData : { value: sourceData };
@@ -760,8 +800,8 @@ export class NestedJsonConverter {
 				if (sourceData === undefined) continue;
 
 				if (parentPath !== null) {
-					// Get the last item of the parent array
-					const lastParentItem = mergeState.lastItemByPath.get(parentPath);
+					// Get the last item of the parent array (tracked or resolved from target).
+					const lastParentItem = this.getLastArrayItemAtPath(target, parentPath, mergeState);
 					if (lastParentItem) {
 						// Get the relative path from parent to this array
 						const relativePath = arrayPath.slice(parentPath.length + 1);
@@ -864,6 +904,38 @@ export class NestedJsonConverter {
 		}
 
 		return current;
+	}
+
+	/**
+	 * Resolve the last item for an array path using merge state first,
+	 * then fallback to the current target structure.
+	 */
+	private static getLastArrayItemAtPath(
+		target: NestedObject,
+		path: string,
+		mergeState: MergeState
+	): NestedObject | undefined {
+		const tracked = mergeState.lastItemByPath.get(path);
+		if (tracked) return tracked;
+
+		const valueAtPath = this.getValueAtPath(target, path);
+		if (valueAtPath === undefined || valueAtPath === null || typeof valueAtPath !== "object") {
+			return undefined;
+		}
+
+		if (Array.isArray(valueAtPath)) {
+			if (valueAtPath.length === 0) return undefined;
+			const lastItem = valueAtPath[valueAtPath.length - 1];
+			if (!lastItem || typeof lastItem !== "object" || Array.isArray(lastItem)) {
+				return undefined;
+			}
+
+			mergeState.lastItemByPath.set(path, lastItem as NestedObject);
+			return lastItem as NestedObject;
+		}
+
+		mergeState.lastItemByPath.set(path, valueAtPath as NestedObject);
+		return valueAtPath as NestedObject;
 	}
 
 	/**

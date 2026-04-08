@@ -51,7 +51,7 @@ export class CsvReader {
 		const quote = options.quote || '"';
 		const skipRows = options.skipRows || 0;
 
-		const lines = this.splitLines(processedContent);
+		const lines = this.splitLines(processedContent, quote);
 
 		if (lines.length === 0) return [];
 
@@ -199,6 +199,7 @@ export class CsvReader {
 	 * Split CSV content into lines, respecting quoted fields that may contain newlines.
 	 *
 	 * @param content - The CSV content
+	 * @param quote - The quote character (default: '"')
 	 * @returns Array of lines (quoted newlines are preserved within lines)
 	 *
 	 * @example
@@ -207,7 +208,7 @@ export class CsvReader {
 	 * // ['id,note', '1,"Line 1\nLine 2"']
 	 * ```
 	 */
-	static splitLines(content: string): string[] {
+	static splitLines(content: string, quote = '"'): string[] {
 		const lines: string[] = [];
 		let currentLine = "";
 		let insideQuotes = false;
@@ -216,9 +217,15 @@ export class CsvReader {
 			const char = content[i];
 			const nextChar = i + 1 < content.length ? content[i + 1] : "";
 
-			if (char === '"') {
-				insideQuotes = !insideQuotes;
-				currentLine += char;
+			if (char === quote) {
+				if (insideQuotes && nextChar === quote) {
+					// Escaped quote
+					currentLine += quote + quote;
+					i++; // Skip the second quote
+				} else {
+					insideQuotes = !insideQuotes;
+					currentLine += char;
+				}
 			} else if (char === "\r" && nextChar === "\n" && !insideQuotes) {
 				// Windows line ending
 				lines.push(currentLine);

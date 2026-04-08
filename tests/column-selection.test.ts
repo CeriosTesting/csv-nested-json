@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { CsvReader, CsvStreamParser, NestedJsonConverter } from "../src";
+import { CsvParseError, CsvReader, CsvStreamParser, NestedJsonConverter } from "../src";
 import type { NestedObject } from "../src/types";
 
 describe("Column Selection/Exclusion", () => {
@@ -158,29 +158,43 @@ describe("Column Selection/Exclusion", () => {
 			expect(result[0].id).toBe("1");
 			expect(result[1].id).toBe("2");
 		});
-	});
 
-	describe("column selection with headerTransformer", () => {
-		it("should filter based on original header names, not transformed names", () => {
-			const csv = "User ID,User Name,Email\n1,John,john@test.com";
-			const result = CsvReader.parse(csv, {
-				headerTransformer: (h: string) => h.toLowerCase().replace(" ", "_"),
-				includeColumns: ["User ID", "User Name"],
-			});
+		it("should throw when identifierColumn is missing", () => {
+			const records = [
+				{ name: "Widget", variant: "Small" },
+				{ name: "", variant: "Medium" },
+				{ name: "Gadget", variant: "Standard" },
+			];
 
-			expect(result[0]).toEqual({ user_id: "1", user_name: "John" });
+			expect(() => {
+				NestedJsonConverter.convert(records, {
+					identifierColumn: "id",
+				});
+			}).toThrow(CsvParseError);
+			expect(() => {
+				NestedJsonConverter.convert(records, {
+					identifierColumn: "id",
+				});
+			}).toThrow("identifierColumn 'id' not found in headers");
 		});
-	});
 
-	describe("column selection with columnMapping", () => {
-		it("should filter based on original headers when columnMapping is applied", () => {
-			const csv = "id,firstName,lastName\n1,John,Doe";
-			const result = CsvReader.parse(csv, {
-				columnMapping: { firstName: "first_name", lastName: "last_name" },
-				includeColumns: ["id", "firstName"],
-			});
+		it("should throw when first row is a continuation row", () => {
+			const records = [
+				{ id: "", value: "a" },
+				{ id: "1", value: "b" },
+			];
 
-			expect(result[0]).toEqual({ id: "1", first_name: "John" });
+			expect(() => {
+				NestedJsonConverter.convert(records, {
+					identifierColumn: "id",
+				});
+			}).toThrow("continuation row, but no base row exists");
+		});
+
+		it("should throw when no columns are available after filtering", () => {
+			expect(() => {
+				NestedJsonConverter.convert([{}]);
+			}).toThrow("No columns available after filtering");
 		});
 	});
 
@@ -232,6 +246,77 @@ describe("Column Selection/Exclusion", () => {
 				"Warning: Column 'missing' specified in includeColumns does not exist in the CSV headers."
 			);
 			warnSpy.mockRestore();
+		});
+
+		it("should throw when identifierColumn is missing in streaming parser", async () => {
+			const csv = "name,variant\nWidget,Small\n,Medium\n";
+			const stream = Readable.from([csv]);
+
+			await expect(
+				CsvStreamParser.parseStream(stream, {
+					identifierColumn: "id",
+				})
+			).rejects.toThrow("identifierColumn 'id' not found in headers");
+		});
+	});
+
+	describe("column selection with headerTransformer", () => {
+		it("should filter based on original header names, not transformed names", () => {
+			const csv = "User ID,User Name,Email\n1,John,john@test.com";
+			const result = CsvReader.parse(csv, {
+				headerTransformer: (h: string) => h.toLowerCase().replace(" ", "_"),
+				includeColumns: ["User ID", "User Name"],
+			});
+
+			expect(result[0]).toEqual({ user_id: "1", user_name: "John" });
+		});
+
+		it("should require transformed identifierColumn name in streaming parser", async () => {
+			const csv = "User ID,values[]\n1,a\n,b";
+
+			await expect(
+				CsvStreamParser.parseStream(Readable.from([csv]), {
+					headerTransformer: (h: string) => h.toLowerCase().replace(" ", "_"),
+					identifierColumn: "User ID",
+				})
+			).rejects.toThrow("identifierColumn 'User ID' not found in headers");
+
+			const result = await CsvStreamParser.parseStream(Readable.from([csv]), {
+				headerTransformer: (h: string) => h.toLowerCase().replace(" ", "_"),
+				identifierColumn: "user_id",
+			});
+
+			expect(result).toEqual([{ user_id: "1", values: ["a", "b"] }]);
+		});
+	});
+
+	describe("column selection with columnMapping", () => {
+		it("should filter based on original headers when columnMapping is applied", () => {
+			const csv = "id,firstName,lastName\n1,John,Doe";
+			const result = CsvReader.parse(csv, {
+				columnMapping: { firstName: "first_name", lastName: "last_name" },
+				includeColumns: ["id", "firstName"],
+			});
+
+			expect(result[0]).toEqual({ id: "1", first_name: "John" });
+		});
+
+		it("should require mapped identifierColumn name in streaming parser", async () => {
+			const csv = "id,values[]\n1,a\n,b";
+
+			await expect(
+				CsvStreamParser.parseStream(Readable.from([csv]), {
+					columnMapping: { id: "recordId" },
+					identifierColumn: "id",
+				})
+			).rejects.toThrow("identifierColumn 'id' not found in headers");
+
+			const result = await CsvStreamParser.parseStream(Readable.from([csv]), {
+				columnMapping: { id: "recordId" },
+				identifierColumn: "recordId",
+			});
+
+			expect(result).toEqual([{ recordId: "1", values: ["a", "b"] }]);
 		});
 	});
 

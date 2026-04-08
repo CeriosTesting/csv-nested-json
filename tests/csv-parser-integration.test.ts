@@ -260,5 +260,47 @@ describe("CsvParser - Integration Tests", () => {
 				},
 			]);
 		});
+
+		it("should handle nested forced arrays with sparse continuation rows", () => {
+			const csvContent = `scenarioLabel,datasetTag,groups[].groupId,groups[].groupClass,groups[].samples[].intervalCode,groups[].samples[].sampleType,groups[].samples[].metricValue
+Scenario A1,pub_synthetic_x,990000000000000101,SIMULATED_STREAM_TYPE,P11M,CATEGORY_ALPHA,-11.111
+,,,,P11M,CATEGORY_ALPHA,-11.222
+,,,,P11M,CATEGORY_ALPHA,-11.333
+,,990000000000000202,SIMULATED_STREAM_TYPE,P11M,CATEGORY_ALPHA,-22.111
+,,,,P11M,CATEGORY_ALPHA,-22.222
+,,,,P11M,CATEGORY_ALPHA,-22.333`;
+
+			const result = CsvParser.parseString(csvContent, {
+				autoParseNumbers: true,
+				preserveUnsafeIntegersAsString: true,
+			});
+
+			expect(result).toEqual([
+				{
+					scenarioLabel: "Scenario A1",
+					datasetTag: "pub_synthetic_x",
+					groups: [
+						{
+							groupId: "990000000000000101",
+							groupClass: "SIMULATED_STREAM_TYPE",
+							samples: [
+								{ intervalCode: "P11M", sampleType: "CATEGORY_ALPHA", metricValue: -11.111 },
+								{ intervalCode: "P11M", sampleType: "CATEGORY_ALPHA", metricValue: -11.222 },
+								{ intervalCode: "P11M", sampleType: "CATEGORY_ALPHA", metricValue: -11.333 },
+							],
+						},
+						{
+							groupId: "990000000000000202",
+							groupClass: "SIMULATED_STREAM_TYPE",
+							samples: [
+								{ intervalCode: "P11M", sampleType: "CATEGORY_ALPHA", metricValue: -22.111 },
+								{ intervalCode: "P11M", sampleType: "CATEGORY_ALPHA", metricValue: -22.222 },
+								{ intervalCode: "P11M", sampleType: "CATEGORY_ALPHA", metricValue: -22.333 },
+							],
+						},
+					],
+				},
+			]);
+		});
 	});
 });

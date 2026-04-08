@@ -64,8 +64,11 @@ console.log(result);
 | `CsvParser.parseFileSync()` | Parse CSV file synchronously |
 | `CsvParser.parseFile()` | Parse CSV file asynchronously |
 | `CsvParser.parseString()` | Parse CSV string content |
-| `CsvParser.parseStream()` | Parse CSV from readable stream |
+| `CsvParser.parseStream()` | Parse CSV from readable stream (buffers full content in memory) |
 | `CsvStreamParser` | True streaming parser for very large files |
+| `CsvReader.parse()` | Low-level CSV parser that returns flat records |
+| `CsvFileReader.readFile*()` | Low-level file/stream text reader |
+| `NestedJsonConverter.convert()` | Low-level flat-record to nested JSON converter |
 | `JsonToCsv.stringify()` | Convert JSON objects to CSV string |
 | `JsonToCsv.writeFileSync()` | Write JSON objects to CSV file (sync) |
 | `JsonToCsv.writeFile()` | Write JSON objects to CSV file (async) |
@@ -116,11 +119,13 @@ const stream = createReadStream('./large-file.csv');
 const result = await CsvParser.parseStream(stream);
 ```
 
-**When to use:** Very large files (>100MB), memory-constrained environments, real-time processing.
+**When to use:** CSV input already comes from a readable stream and buffering the full result in memory is acceptable.
+
+**Note:** `CsvParser.parseStream()` buffers the entire stream before converting. For true incremental parsing, use `CsvStreamParser`.
 
 ### 5. True Streaming Parser (Memory Efficient)
 
-For very large files where you want to process records one at a time without loading everything into memory:
+For very large files where you want streaming processing without loading everything into memory (continuation rows are grouped by default):
 
 ```typescript
 import { CsvStreamParser } from '@cerios/csv-nested-json';
@@ -540,7 +545,7 @@ Handle CSV files with duplicate column names:
 const csvContent = `id,name,value,value,value
 1,Test,A,B,C`;
 
-// Keep first occurrence (default)
+// Keep first occurrence
 const result1 = CsvParser.parseString(csvContent, {
   duplicateHeaders: 'first'
 });
@@ -659,6 +664,8 @@ const result = CsvParser.parseString(csvContent, {
 // ]
 ```
 
+Null conversion is opt-in. Values are only treated as null when `nullValues` is provided.
+
 ### BOM Handling
 
 The parser automatically strips UTF-8 and UTF-16 BOM by default:
@@ -710,15 +717,14 @@ const result = CsvParser.parseFileSync('./complex-data.csv');
       "firstName": "Jane",
       "lastName": "Doe"
     },
-    "addresses": {
-      "type": "home",
-      "city": "Chicago"
-    }
+    "addresses": [
+      { "type": "home", "city": "Chicago" }
+    ]
   }
 ]
 ```
 
-**Note:** The first record has an array of addresses (multiple entries), while the second has a single address object.
+**Note:** Array shape is normalized across records. If one record needs an array for a path, other records with a single value for that path are represented as single-item arrays.
 
 ### Custom Delimiters
 
@@ -895,8 +901,8 @@ interface CsvParserOptions {
   limit?: number;                                 // Max records to parse
 
   // Column selection
-  includeColumns?: string[];                      // Include only these columns
-  excludeColumns?: string[];                      // Exclude these columns
+  includeColumns?: string[];                      // Include only these columns (matched against original CSV headers)
+  excludeColumns?: string[];                      // Exclude columns after includeColumns is applied
 
   // Duplicate header handling
   duplicateHeaders?: DuplicateHeaderStrategy;     // Default: 'error'
@@ -929,8 +935,8 @@ interface CsvParserOptions {
 
 // Streaming-specific options (CsvStreamParser)
 interface CsvStreamParserOptions extends CsvParserOptions {
-  nested?: boolean;                               // Emit nested objects (default: true)
   batchSize?: number;                             // Emit records in batches
+  maxContinuationGroupSize?: number;              // Max raw rows buffered per continuation group (default: 10000)
   progressCallback?: ProgressCallback;            // Progress tracking callback
   progressInterval?: number;                      // Records between callbacks (default: 100)
 }
@@ -1054,6 +1060,9 @@ Array of column names to include. Only these columns will be in the output.
 includeColumns: ['id', 'name', 'email']  // Only include these columns
 ```
 
+`includeColumns` and `excludeColumns` can be combined. Inclusion is applied first, then exclusion.
+Column filtering matches original CSV header names before `headerTransformer` and `columnMapping` are applied.
+
 #### `excludeColumns`
 
 Array of column names to exclude. All other columns will be included.
@@ -1080,9 +1089,24 @@ duplicateHeaders: 'rename'  // 'error' | 'rename' | 'combine' | 'first' | 'last'
 
 Column to use as the identifier for grouping continuation rows. By default, the first column is used to identify new records. When this column has an empty value, the row is treated as a continuation of the previous record.
 
+The first data row in a group must contain an identifier value. If the first row is a continuation row (empty identifier), parsing throws `CsvParseError` to avoid ambiguous grouping.
+
+If `headerTransformer` or `columnMapping` is used, set `identifierColumn` to the transformed/mapped header name (not the original CSV header).
+
 ```typescript
 // Use 'productId' instead of first column to group rows
 identifierColumn: 'productId'
+```
+
+#### `maxContinuationGroupSize` (streaming only)
+
+Maximum number of raw rows buffered for a single continuation group in `CsvStreamParser`. This protects against unbounded memory growth when identifier values are missing for long stretches.
+
+- Default: `10000`
+- When exceeded, parsing throws `CsvParseError`
+
+```typescript
+maxContinuationGroupSize: 5000
 ```
 
 #### `arraySuffixIndicator`
@@ -1097,7 +1121,7 @@ How to handle forced array fields with no values:
 
 #### `nullValues`
 
-Strings to interpret as null values. Default: `['null', 'NULL', 'nil', 'NIL', '']`
+Strings to interpret as null values. Null detection is disabled unless this option is provided.
 
 #### `nullRepresentation`
 
@@ -1186,7 +1210,7 @@ Parses CSV string content.
 
 #### `parseStream<T>(stream: Readable, options?: CsvParserOptions): Promise<T[]>`
 
-Parses CSV from a readable stream.
+Parses CSV from a readable stream and returns all records. This method buffers the full stream in memory before conversion.
 
 ### CsvStreamParser Class
 
@@ -1196,10 +1220,10 @@ A Transform stream that parses CSV data chunk by chunk, emitting records as they
 import { CsvStreamParser, ProgressInfo } from '@cerios/csv-nested-json';
 
 const parser = new CsvStreamParser({
-  nested: true,           // Emit nested objects (default: true)
   autoParseNumbers: true,
   limit: 1000,            // Stop after 1000 records
   batchSize: 100,         // Emit in batches of 100
+  maxContinuationGroupSize: 10000, // Safety guard for continuation buffering
   progressCallback: (info: ProgressInfo) => {
     console.log(`Progress: ${info.recordsEmitted} records, ${info.elapsedMs}ms`);
   },
@@ -1371,8 +1395,8 @@ Creates:
 | `parseFileSync()` | Scripts, small files | <10MB | Yes |
 | `parseFile()` | Web servers, medium files | 10MB-100MB | No |
 | `parseString()` | API responses, testing | Any (in-memory) | Yes |
-| `parseStream()` | Large files, memory efficiency | >100MB | No |
-| `CsvStreamParser` | Very large files, ETL pipelines | Any size | No |
+| `parseStream()` | Readable stream inputs with buffered output | Any (buffered in memory) | No |
+| `CsvStreamParser` | Large/very large files, ETL pipelines | Any size | No |
 
 ### Traditional CSV Parsing
 
@@ -1513,11 +1537,11 @@ interface CsvStreamParserOptions extends CsvParserOptions { /* ... */ }
 ## 🎯 Best Practices
 
 1. **Choose the Right Method:**
-   - Use `parseFileSync()` for small files in scripts
-   - Use `parseFile()` for web servers and async workflows
-   - Use `parseString()` for API responses and testing
-   - Use `parseStream()` for large files
-   - Use `CsvStreamParser` for very large files or when you need to process records one at a time
+  - Use `parseFileSync()` for small files in scripts
+  - Use `parseFile()` for web servers and async workflows
+  - Use `parseString()` for API responses and testing
+  - Use `parseStream()` when your source is a readable stream and buffering all content is acceptable
+  - Use `CsvStreamParser` for large/very large files or incremental processing; it groups continuation rows to match `CsvParser` continuation semantics
 
 2. **Use Appropriate Validation Mode:**
    - Use `'ignore'` when you trust the data source
