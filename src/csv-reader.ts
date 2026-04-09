@@ -1,4 +1,11 @@
 import { CsvDuplicateHeaderError, CsvValidationError } from "./errors";
+import {
+	type InternalCsvCellValue,
+	type InternalCsvRecord,
+	isEmptyCsvCellValue,
+	QUOTED_EMPTY_CELL,
+	toPublicCsvCellValue,
+} from "./internal-empty-cell";
 import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, ValidationMode } from "./types";
 
 /**
@@ -35,6 +42,23 @@ export class CsvReader {
 	 * ```
 	 */
 	static parse(content: string, options: CsvParserOptions = {}): CsvRecord[] {
+		return this.parseInternal(content, options, false) as CsvRecord[];
+	}
+
+	/**
+	 * Parse CSV content with internal quoted-empty provenance tracking.
+	 *
+	 * @internal
+	 */
+	static parseWithQuotedEmptyProvenance(content: string, options: CsvParserOptions = {}): InternalCsvRecord[] {
+		return this.parseInternal(content, options, true);
+	}
+
+	private static parseInternal(
+		content: string,
+		options: CsvParserOptions,
+		preserveQuotedEmpty: boolean
+	): InternalCsvRecord[] {
 		if (!content || content.trim() === "") {
 			return [];
 		}
@@ -91,13 +115,13 @@ export class CsvReader {
 		headers = processedHeaders;
 
 		// Parse data rows
-		const records: CsvRecord[] = [];
+		const records: InternalCsvRecord[] = [];
 		let dataRowIndex = 0;
 		for (let i = dataStartIndex + 1; i < lines.length; i++) {
 			const line = lines[i].trim();
 			if (line === "") continue; // Skip empty lines
 
-			const values = this.parseLine(lines[i], delimiter, quote);
+			const values = this.parseLine(lines[i], delimiter, quote, preserveQuotedEmpty);
 
 			// Validate column count
 			if (values.length > headers.length && validationMode !== "ignore") {
@@ -113,48 +137,11 @@ export class CsvReader {
 				}
 			}
 
-			const record: CsvRecord = {};
-			for (let j = 0; j < headers.length; j++) {
-				// Get the original column index for this filtered header
-				const originalIndex = includedIndices[j];
-				let value = originalIndex < values.length ? values[originalIndex] : "";
-
-				// Apply default value if cell is empty
-				if (value === "" && options.defaultValues?.[headers[j]] !== undefined) {
-					value = options.defaultValues[headers[j]];
-				}
-
-				const header = headers[j];
-
-				// Handle duplicate values based on strategy
-				if (duplicateIndices.has(j)) {
-					switch (dupStrategy) {
-						case "first":
-							// Only set if not already present
-							if (!(header in record)) {
-								record[header] = value;
-							}
-							break;
-						case "combine":
-							// Combine into comma-separated values (arrays handled by NestedJsonConverter)
-							if (header in record) {
-								record[header] = record[header] ? `${record[header]},${value}` : value;
-							} else {
-								record[header] = value;
-							}
-							break;
-						default:
-							// Just overwrite (default behavior)
-							record[header] = value;
-							break;
-					}
-				} else {
-					record[header] = value;
-				}
-			}
+			const record = this.createRecord(values, headers, includedIndices, duplicateIndices, dupStrategy, options);
 
 			// Apply row filter if specified
-			if (options.rowFilter && !options.rowFilter(record, dataRowIndex)) {
+			const rowFilterRecord = preserveQuotedEmpty ? this.toPublicRecord(record) : (record as CsvRecord);
+			if (options.rowFilter && !options.rowFilter(rowFilterRecord, dataRowIndex)) {
 				dataRowIndex++;
 				continue;
 			}
@@ -164,6 +151,61 @@ export class CsvReader {
 		}
 
 		return records;
+	}
+
+	private static createRecord(
+		values: InternalCsvCellValue[],
+		headers: string[],
+		includedIndices: number[],
+		duplicateIndices: Set<number>,
+		dupStrategy: DuplicateHeaderStrategy,
+		options: CsvParserOptions
+	): InternalCsvRecord {
+		const record: InternalCsvRecord = {};
+
+		for (let j = 0; j < headers.length; j++) {
+			const originalIndex = includedIndices[j];
+			let value: InternalCsvCellValue = originalIndex < values.length ? values[originalIndex] : "";
+
+			if (isEmptyCsvCellValue(value) && options.defaultValues?.[headers[j]] !== undefined) {
+				value = options.defaultValues[headers[j]];
+			}
+
+			const header = headers[j];
+
+			if (duplicateIndices.has(j)) {
+				switch (dupStrategy) {
+					case "first":
+						if (!(header in record)) {
+							record[header] = value;
+						}
+						break;
+					case "combine": {
+						const existing = header in record ? toPublicCsvCellValue(record[header]) : "";
+						const incoming = toPublicCsvCellValue(value);
+						record[header] = existing ? `${existing},${incoming}` : incoming;
+						break;
+					}
+					default:
+						record[header] = value;
+						break;
+				}
+			} else {
+				record[header] = value;
+			}
+		}
+
+		return record;
+	}
+
+	private static toPublicRecord(record: InternalCsvRecord): CsvRecord {
+		const publicRecord: CsvRecord = {};
+
+		for (const [header, value] of Object.entries(record)) {
+			publicRecord[header] = toPublicCsvCellValue(value);
+		}
+
+		return publicRecord;
 	}
 
 	/**
@@ -266,10 +308,18 @@ export class CsvReader {
 	 * // ['1', 'Say "Hello"', 'test']
 	 * ```
 	 */
-	static parseLine(line: string, delimiter = ",", quote = '"'): string[] {
-		const values: string[] = [];
+	static parseLine(line: string, delimiter?: string, quote?: string): string[];
+	static parseLine(
+		line: string,
+		delimiter: string,
+		quote: string,
+		preserveQuotedEmpty: boolean
+	): InternalCsvCellValue[];
+	static parseLine(line: string, delimiter = ",", quote = '"', preserveQuotedEmpty = false): InternalCsvCellValue[] {
+		const values: InternalCsvCellValue[] = [];
 		let currentValue = "";
 		let insideQuotes = false;
+		let fieldWasQuoted = false;
 
 		for (let i = 0; i < line.length; i++) {
 			const char = line[i];
@@ -283,20 +333,34 @@ export class CsvReader {
 				} else {
 					// Toggle quote state
 					insideQuotes = !insideQuotes;
+					fieldWasQuoted = true;
 				}
 			} else if (char === delimiter && !insideQuotes) {
 				// Field delimiter
-				values.push(currentValue);
+				values.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
 				currentValue = "";
+				fieldWasQuoted = false;
 			} else {
 				currentValue += char;
 			}
 		}
 
 		// Don't forget the last value
-		values.push(currentValue);
+		values.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
 
 		return values;
+	}
+
+	private static finalizeParsedCellValue(
+		value: string,
+		fieldWasQuoted: boolean,
+		preserveQuotedEmpty: boolean
+	): InternalCsvCellValue {
+		if (preserveQuotedEmpty && fieldWasQuoted && value === "") {
+			return QUOTED_EMPTY_CELL;
+		}
+
+		return value;
 	}
 
 	/**

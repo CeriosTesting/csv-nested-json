@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import type { HeaderTransformer, RowFilter } from "../src";
 import { CsvParser, CsvStreamParser } from "../src";
 
@@ -493,6 +494,128 @@ describe("Parser Options - New Features", () => {
 			expect(results).toHaveLength(2);
 			expect((results[0] as { value: null }).value).toBeNull();
 			expect(results[1]).toHaveProperty("value", "test");
+		});
+	});
+
+	describe("empty value preservation", () => {
+		it("should omit unquoted empty values and preserve quoted empties by default", () => {
+			const csv = 'id,emptyColumn,emptyQuoted\n1,,""';
+
+			const result = CsvParser.parseString(csv);
+
+			expect(result).toEqual([{ id: "1", emptyQuoted: "" }]);
+		});
+
+		it("should preserve only unquoted empty columns", () => {
+			const csv = 'id,emptyColumn,emptyQuoted\n1,,""';
+
+			const result = CsvParser.parseString(csv, {
+				preserveEmptyColumnAsEmptyString: true,
+				preserveEmptyString: false,
+			});
+
+			expect(result).toEqual([{ id: "1", emptyColumn: "" }]);
+		});
+
+		it("should preserve only quoted empty strings", () => {
+			const csv = 'id,emptyColumn,emptyQuoted\n1,,""';
+
+			const result = CsvParser.parseString(csv, {
+				preserveEmptyString: true,
+			});
+
+			expect(result).toEqual([{ id: "1", emptyQuoted: "" }]);
+		});
+
+		it("should preserve both kinds of empty values when both options are enabled", () => {
+			const csv = 'id,emptyColumn,emptyQuoted\n1,,""';
+
+			const result = CsvParser.parseString(csv, {
+				preserveEmptyColumnAsEmptyString: true,
+				preserveEmptyString: true,
+			});
+
+			expect(result).toEqual([{ id: "1", emptyColumn: "", emptyQuoted: "" }]);
+		});
+
+		it("should keep defaultValues precedence over preserve options", () => {
+			const csv = 'id,emptyColumn,emptyQuoted\n1,,""';
+
+			const result = CsvParser.parseString(csv, {
+				defaultValues: {
+					emptyColumn: "fallback-column",
+					emptyQuoted: "fallback-quoted",
+				},
+				preserveEmptyColumnAsEmptyString: true,
+				preserveEmptyString: true,
+			});
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					emptyColumn: "fallback-column",
+					emptyQuoted: "fallback-quoted",
+				},
+			]);
+		});
+
+		it("should apply null handling before preserve options", () => {
+			const csv = 'id,emptyColumn,emptyQuoted\n1,,""';
+
+			const result = CsvParser.parseString(csv, {
+				nullValues: [""],
+				nullRepresentation: "null",
+				preserveEmptyColumnAsEmptyString: true,
+				preserveEmptyString: true,
+			});
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					emptyColumn: null,
+					emptyQuoted: null,
+				},
+			]);
+		});
+
+		it("should keep quoted-empty identifier values as continuation rows", () => {
+			const csv = 'id,tags[]\n1,a\n"",b\n2,c';
+
+			const result = CsvParser.parseString(csv, {
+				preserveEmptyString: true,
+			});
+
+			expect(result).toEqual([
+				{ id: "1", tags: ["a", "b"] },
+				{ id: "2", tags: ["c"] },
+			]);
+		});
+
+		it("should support quoted-empty preservation with custom quote character", () => {
+			const csv = "id,emptyQuoted,emptyColumn\n1,'',\n2,'value',";
+
+			const result = CsvParser.parseString(csv, {
+				quote: "'",
+				preserveEmptyString: true,
+			});
+
+			expect(result).toEqual([
+				{ id: "1", emptyQuoted: "" },
+				{ id: "2", emptyQuoted: "value" },
+			]);
+		});
+
+		it("should match CsvStreamParser output for empty preservation scenarios", async () => {
+			const csv = 'id,emptyColumn,emptyQuoted\n1,,""\n2,filled,""';
+			const options = {
+				preserveEmptyString: true,
+				preserveEmptyColumnAsEmptyString: false,
+			};
+
+			const fromParser = CsvParser.parseString(csv, options);
+			const fromStream = await CsvStreamParser.parseStream(Readable.from([csv]), options);
+
+			expect(fromStream).toEqual(fromParser);
 		});
 	});
 

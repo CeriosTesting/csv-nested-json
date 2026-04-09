@@ -636,6 +636,42 @@ const result = CsvParser.parseString(csvContent, {
 // ]
 ```
 
+### Empty Value Preservation
+
+By default, unquoted empty values are omitted and explicitly quoted empty values are preserved. You can control each case independently.
+
+```typescript
+const csvContent = `id,emptyColumn,emptyQuoted
+1,,""`;
+
+// Preserve only unquoted empties: ,, -> ''
+const preserveColumns = CsvParser.parseString(csvContent, {
+  preserveEmptyColumnAsEmptyString: true,
+  preserveEmptyString: false
+});
+// [{ id: "1", emptyColumn: "" }]
+
+// Preserve only quoted empties: "" -> ''
+const preserveQuoted = CsvParser.parseString(csvContent, {
+  preserveEmptyString: true
+});
+// [{ id: "1", emptyQuoted: "" }]
+
+// Preserve both
+const preserveBoth = CsvParser.parseString(csvContent, {
+  preserveEmptyColumnAsEmptyString: true,
+  preserveEmptyString: true
+});
+// [{ id: "1", emptyColumn: "", emptyQuoted: "" }]
+```
+
+When multiple options apply, precedence is:
+
+1. `defaultValues`
+2. `nullValues` + `nullRepresentation`
+3. `preserveEmptyColumnAsEmptyString` / `preserveEmptyString`
+4. Omit
+
 ### Null Value Handling
 
 ```typescript
@@ -929,6 +965,10 @@ interface CsvParserOptions {
   // Default values
   defaultValues?: Record<string, string>;         // Default values for empty cells
 
+  // Empty value preservation
+  preserveEmptyColumnAsEmptyString?: boolean;     // Preserve unquoted empties: ,,
+  preserveEmptyString?: boolean;                  // Preserve quoted empties: ""
+
   // Row grouping
   identifierColumn?: string;                      // Column for grouping continuation rows
 }
@@ -1139,6 +1179,20 @@ Default values for columns when cells are empty.
 defaultValues: { status: 'pending', country: 'Unknown' }
 ```
 
+#### `preserveEmptyColumnAsEmptyString`
+
+Preserve unquoted empty columns (for example `,,`) as `''` in nested output.
+
+- Default: `false`
+
+#### `preserveEmptyString`
+
+Preserve explicitly quoted empty strings (for example `""` with the default quote character) as `''` in nested output.
+
+- Default: `true`
+
+Both options work for `CsvParser` and `CsvStreamParser`. Set `preserveEmptyString: false` if you want quoted empties omitted.
+
 ### Complete Example with All Options
 
 ```typescript
@@ -1188,7 +1242,11 @@ const result = await CsvParser.parseFile('./data.csv', {
   nullRepresentation: 'null',
 
   // Defaults
-  defaultValues: { status: 'pending' }
+  defaultValues: { status: 'pending' },
+
+  // Empty value preservation
+  preserveEmptyColumnAsEmptyString: true,
+  preserveEmptyString: true
 });
 ```
 

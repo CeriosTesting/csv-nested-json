@@ -1,4 +1,5 @@
 import { CsvParseError } from "./errors";
+import { type InternalCsvRecord, isQuotedEmptyCell, QUOTED_EMPTY_CELL } from "./internal-empty-cell";
 import type {
 	CsvParserOptions,
 	CsvRecord,
@@ -8,6 +9,10 @@ import type {
 	NestedValue,
 	RowContext,
 } from "./types";
+
+type ConvertibleCsvRecord = CsvRecord | InternalCsvRecord;
+type TransformedRecordValue = string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL;
+type TransformedRecord = Record<string, TransformedRecordValue>;
 
 /**
  * Nested JSON conversion utilities.
@@ -57,7 +62,7 @@ export class NestedJsonConverter {
 	 * // [{ id: 1, active: true, score: 95.5 }]
 	 * ```
 	 */
-	static convert(records: CsvRecord[], options: CsvParserOptions = {}): NestedObject[] {
+	static convert(records: ConvertibleCsvRecord[], options: CsvParserOptions = {}): NestedObject[] {
 		if (records.length === 0) return [];
 
 		const arraySuffix = options.arraySuffixIndicator ?? "[]";
@@ -101,21 +106,20 @@ export class NestedJsonConverter {
 		const identifierColumn = configuredIdentifier ?? availableColumns[0];
 
 		// Group by the identifier column
-		const groups: NestedObject[][] = [];
-		let currentGroup: NestedObject[] = [];
+		const groups: TransformedRecord[][] = [];
+		let currentGroup: TransformedRecord[] = [];
 
 		for (let rowIndex = 0; rowIndex < transformedRecords.length; rowIndex++) {
 			const row = transformedRecords[rowIndex];
 			const identifierValue = row[identifierColumn];
-			const hasIdentifierValue =
-				identifierValue !== undefined && identifierValue !== null && String(identifierValue).trim() !== "";
+			const hasIdentifierValue = this.hasIdentifierValue(identifierValue);
 
 			// Check if the identifier column has a value
 			if (hasIdentifierValue) {
 				if (currentGroup.length > 0) {
 					groups.push(currentGroup);
 				}
-				currentGroup = [row as NestedObject];
+				currentGroup = [row];
 			} else {
 				if (currentGroup.length === 0) {
 					throw new CsvParseError(
@@ -123,7 +127,12 @@ export class NestedJsonConverter {
 					);
 				}
 
-				currentGroup.push(row as NestedObject);
+				// Continuation rows should never overwrite the grouping identifier value.
+				const continuationRow: TransformedRecord = {
+					...row,
+					[identifierColumn]: undefined,
+				};
+				currentGroup.push(continuationRow);
 			}
 		}
 		if (currentGroup.length > 0) {
@@ -131,7 +140,9 @@ export class NestedJsonConverter {
 		}
 
 		// First pass: process all groups with hierarchy-aware merging
-		const processedGroups = groups.map(group => this.processGroupWithHierarchy(group, hierarchy, forcedArrayFields));
+		const processedGroups = groups.map(group =>
+			this.processGroupWithHierarchy(group, hierarchy, forcedArrayFields, options)
+		);
 
 		// Second pass: detect which fields are arrays in any group (auto-detected)
 		const autoArrayFields = this.detectArrayFields(processedGroups);
@@ -145,14 +156,22 @@ export class NestedJsonConverter {
 		);
 	}
 
+	private static hasIdentifierValue(value: TransformedRecordValue): boolean {
+		if (value === undefined || value === null || isQuotedEmptyCell(value)) {
+			return false;
+		}
+
+		return String(value).trim() !== "";
+	}
+
 	/**
 	 * Apply value transformations (null detection, auto-parse numbers, booleans, dates, custom transformer).
 	 * Transformation order: nullValues → autoParseNumbers → autoParseBooleans → autoParseDates → valueTransformer
 	 */
 	private static applyValueTransformations(
-		records: CsvRecord[],
+		records: InternalCsvRecord[],
 		options: CsvParserOptions
-	): Record<string, string | number | boolean | Date | null | undefined>[] {
+	): TransformedRecord[] {
 		const {
 			autoParseNumbers,
 			preserveUnsafeIntegersAsString,
@@ -168,14 +187,26 @@ export class NestedJsonConverter {
 
 		// If no transformations are needed, return records as-is
 		if (!autoParseNumbers && !autoParseBooleans && !autoParseDates && !valueTransformer && nullValues === undefined) {
-			return records;
+			return records as TransformedRecord[];
 		}
 
 		return records.map(record => {
-			const transformed: Record<string, string | number | boolean | Date | null | undefined> = {};
+			const transformed: TransformedRecord = {};
 
 			for (const [header, value] of Object.entries(record)) {
-				let transformedValue: string | number | boolean | Date | null | undefined = value;
+				let transformedValue: TransformedRecordValue = value;
+
+				if (isQuotedEmptyCell(value)) {
+					if (nullValues !== undefined && nullSet.has("")) {
+						transformedValue = this.applyNullRepresentation(nullRepresentation);
+						if (nullRepresentation === "omit") {
+							continue;
+						}
+					}
+
+					transformed[header] = transformedValue;
+					continue;
+				}
 
 				// Skip empty values (unless they match nullValues)
 				if (value === "") {
@@ -312,7 +343,7 @@ export class NestedJsonConverter {
 		return null;
 	}
 
-	private static detectForcedArrayFields(records: CsvRecord[], arraySuffix: string): Set<string> {
+	private static detectForcedArrayFields(records: ConvertibleCsvRecord[], arraySuffix: string): Set<string> {
 		if (records.length === 0 || !arraySuffix) return new Set();
 
 		const forcedFields = new Set<string>();
@@ -341,11 +372,11 @@ export class NestedJsonConverter {
 		return forcedFields;
 	}
 
-	private static normalizeHeaders(records: CsvRecord[], arraySuffix: string): CsvRecord[] {
-		if (!arraySuffix) return records;
+	private static normalizeHeaders(records: ConvertibleCsvRecord[], arraySuffix: string): InternalCsvRecord[] {
+		if (!arraySuffix) return records as InternalCsvRecord[];
 
 		return records.map(record => {
-			const normalized: CsvRecord = {};
+			const normalized: InternalCsvRecord = {};
 			for (const [key, value] of Object.entries(record)) {
 				// Remove all occurrences of the array suffix from the key
 				const normalizedKey = key
@@ -358,10 +389,10 @@ export class NestedJsonConverter {
 		});
 	}
 
-	private static processGroup(rows: NestedObject[]): NestedObject {
+	private static processGroup(rows: TransformedRecord[], options: CsvParserOptions): NestedObject {
 		const result: NestedObject = {};
 		for (const row of rows) {
-			const rowObj = this.unflatten(row);
+			const rowObj = this.unflatten(row, options);
 			this.deepMerge(result, rowObj);
 		}
 		return result;
@@ -452,7 +483,7 @@ export class NestedJsonConverter {
 	/**
 	 * Analyze a row to determine merge behavior based on which fields have values.
 	 */
-	private static analyzeRowContext(row: NestedObject, hierarchy: ForcedArrayHierarchy): RowContext {
+	private static analyzeRowContext(row: TransformedRecord, hierarchy: ForcedArrayHierarchy): RowContext {
 		const context: RowContext = {
 			populatedPaths: new Set(),
 			hasSiblingValues: new Map(),
@@ -460,7 +491,7 @@ export class NestedJsonConverter {
 
 		// Find all populated paths (normalized flat paths with values)
 		for (const [key, value] of Object.entries(row)) {
-			if (value !== "" && value !== undefined && value !== null) {
+			if (!this.isEffectivelyEmptyValue(value)) {
 				context.populatedPaths.add(key);
 			}
 		}
@@ -501,15 +532,16 @@ export class NestedJsonConverter {
 	 * "create new parent item" vs "append to nested array in existing item".
 	 */
 	private static processGroupWithHierarchy(
-		rows: NestedObject[],
+		rows: TransformedRecord[],
 		hierarchy: ForcedArrayHierarchy,
-		forcedArrayFields: Set<string>
+		forcedArrayFields: Set<string>,
+		options: CsvParserOptions
 	): NestedObject {
 		if (rows.length === 0) return {};
 
 		// If no forced array fields, use the simple merge
 		if (forcedArrayFields.size === 0) {
-			return this.processGroup(rows);
+			return this.processGroup(rows, options);
 		}
 
 		const result: NestedObject = {};
@@ -518,7 +550,7 @@ export class NestedJsonConverter {
 		for (let i = 0; i < rows.length; i++) {
 			const row = rows[i];
 			const isFirstRow = i === 0;
-			const unflattened = this.unflatten(row);
+			const unflattened = this.unflatten(row, options);
 
 			if (isFirstRow) {
 				// First row: merge normally and track last items for each forced array
@@ -633,7 +665,7 @@ export class NestedJsonConverter {
 		rowContext: RowContext,
 		mergeState: MergeState,
 		forcedArrayFields: Set<string>,
-		flatRow: NestedObject
+		flatRow: TransformedRecord
 	): void {
 		// Determine which array paths need new items vs append to existing
 		const createNewItemAt = new Set<string>();
@@ -684,7 +716,11 @@ export class NestedJsonConverter {
 	 * Check if the only data under this path is in child forced array fields.
 	 * Returns false if there are no child forced arrays.
 	 */
-	private static hasOnlyChildArrayData(flatRow: NestedObject, path: string, hierarchy: ForcedArrayHierarchy): boolean {
+	private static hasOnlyChildArrayData(
+		flatRow: TransformedRecord,
+		path: string,
+		hierarchy: ForcedArrayHierarchy
+	): boolean {
 		const prefix = `${path}.`;
 		const childArrayPaths = hierarchy.childrenMap.get(path) || new Set<string>();
 
@@ -697,7 +733,7 @@ export class NestedJsonConverter {
 
 		for (const [key, value] of Object.entries(flatRow)) {
 			if (!key.startsWith(prefix)) continue;
-			if (value === "" || value === undefined) continue;
+			if (this.isEffectivelyEmptyValue(value)) continue;
 
 			hasAnyData = true;
 
@@ -724,10 +760,10 @@ export class NestedJsonConverter {
 	/**
 	 * Check if there's any data under a given path in the flat row.
 	 */
-	private static hasDataUnderPath(flatRow: NestedObject, path: string): boolean {
+	private static hasDataUnderPath(flatRow: TransformedRecord, path: string): boolean {
 		const prefix = `${path}.`;
 		for (const key of Object.keys(flatRow)) {
-			if ((key === path || key.startsWith(prefix)) && flatRow[key] !== "" && flatRow[key] !== undefined) {
+			if ((key === path || key.startsWith(prefix)) && !this.isEffectivelyEmptyValue(flatRow[key])) {
 				return true;
 			}
 		}
@@ -971,11 +1007,25 @@ export class NestedJsonConverter {
 		return this.ensureArrayAtPath(obj, relativePath);
 	}
 
-	private static unflatten(row: NestedObject): NestedObject {
+	private static unflatten(row: TransformedRecord, options: CsvParserOptions): NestedObject {
 		const result: NestedObject = {};
+		const preserveEmptyColumns = options.preserveEmptyColumnAsEmptyString === true;
+		const preserveEmptyStrings = options.preserveEmptyString !== false;
+
 		for (const [key, value] of Object.entries(row)) {
-			// Skip empty strings and undefined, but preserve null as a valid value
-			if (value === "" || value === undefined) continue;
+			if (value === undefined) continue;
+
+			let normalizedValue: NestedValue;
+
+			if (isQuotedEmptyCell(value)) {
+				if (!preserveEmptyStrings) continue;
+				normalizedValue = "";
+			} else if (value === "") {
+				if (!preserveEmptyColumns) continue;
+				normalizedValue = "";
+			} else {
+				normalizedValue = value as NestedValue;
+			}
 
 			const parts = key.split(".");
 			let current: NestedObject = result;
@@ -984,9 +1034,13 @@ export class NestedJsonConverter {
 				if (!current[part]) current[part] = {};
 				current = current[part] as NestedObject;
 			}
-			current[parts[parts.length - 1]] = value;
+			current[parts[parts.length - 1]] = normalizedValue;
 		}
 		return result;
+	}
+
+	private static isEffectivelyEmptyValue(value: unknown): boolean {
+		return value === "" || value === undefined || value === null || isQuotedEmptyCell(value);
 	}
 
 	private static deepMerge(target: NestedObject, source: NestedObject): void {

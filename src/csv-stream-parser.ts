@@ -1,5 +1,13 @@
 import { Transform, type TransformCallback, type TransformOptions } from "node:stream";
 import { CsvDuplicateHeaderError, CsvParseError } from "./errors";
+import {
+	type InternalCsvCellValue,
+	type InternalCsvRecord,
+	isEmptyCsvCellValue,
+	isQuotedEmptyCell,
+	QUOTED_EMPTY_CELL,
+	toPublicCsvCellValue,
+} from "./internal-empty-cell";
 import { NestedJsonConverter } from "./nested-json-converter";
 import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, NestedObject, ProgressCallback } from "./types";
 
@@ -133,7 +141,7 @@ export class CsvStreamParser extends Transform {
 	private recordBatch: NestedObject[] = [];
 
 	// Continuation grouping
-	private groupedRecords: CsvRecord[] = [];
+	private groupedRecords: InternalCsvRecord[] = [];
 	private groupingIdentifierColumn: string | null = null;
 	private maxContinuationGroupSize: number;
 
@@ -401,10 +409,9 @@ export class CsvStreamParser extends Transform {
 			return;
 		}
 
-		const values = this.parseLine(line);
-
 		// First non-skipped line is the header
 		if (!this.headersProcessed) {
+			const values = this.parseLine(line, false);
 			const originalHeaders = values;
 
 			// Apply column filtering FIRST (based on original header names)
@@ -436,11 +443,13 @@ export class CsvStreamParser extends Transform {
 			return;
 		}
 
+		const values = this.parseLine(line, true);
+
 		// Create record from values
 		const record = this.createRecord(values);
 
 		// Apply row filter if specified
-		if (this.options.rowFilter && !this.options.rowFilter(record, this.dataRowIndex)) {
+		if (this.options.rowFilter && !this.options.rowFilter(this.toPublicRecord(record), this.dataRowIndex)) {
 			this.dataRowIndex++;
 			return;
 		}
@@ -495,7 +504,7 @@ export class CsvStreamParser extends Transform {
 	/**
 	 * Add a record to the active continuation group with memory guardrails.
 	 */
-	private pushGroupedRecord(record: CsvRecord): void {
+	private pushGroupedRecord(record: InternalCsvRecord): void {
 		if (this.groupedRecords.length >= this.maxContinuationGroupSize) {
 			const identifierColumn = this.groupingIdentifierColumn ?? this.options.identifierColumn ?? "(unknown)";
 			throw new CsvParseError(
@@ -509,11 +518,10 @@ export class CsvStreamParser extends Transform {
 	/**
 	 * Buffer records and flush groups when a new identifier value is encountered.
 	 */
-	private bufferGroupedRecord(record: CsvRecord): void {
+	private bufferGroupedRecord(record: InternalCsvRecord): void {
 		const identifierColumn = this.groupingIdentifierColumn;
 		const identifierValue = identifierColumn ? record[identifierColumn] : undefined;
-		const startsNewGroup =
-			identifierValue !== undefined && identifierValue !== null && String(identifierValue).trim() !== "";
+		const startsNewGroup = this.hasIdentifierValue(identifierValue);
 
 		if (this.groupedRecords.length === 0) {
 			if (!startsNewGroup) {
@@ -533,6 +541,14 @@ export class CsvStreamParser extends Transform {
 		}
 
 		this.pushGroupedRecord(record);
+	}
+
+	private hasIdentifierValue(value: InternalCsvCellValue | undefined): boolean {
+		if (isEmptyCsvCellValue(value)) {
+			return false;
+		}
+
+		return String(value).trim() !== "";
 	}
 
 	/**
@@ -599,10 +615,13 @@ export class CsvStreamParser extends Transform {
 	/**
 	 * Parse a single line into values.
 	 */
-	private parseLine(line: string): string[] {
-		const values: string[] = [];
+	private parseLine(line: string, preserveQuotedEmpty: false): string[];
+	private parseLine(line: string, preserveQuotedEmpty: true): InternalCsvCellValue[];
+	private parseLine(line: string, preserveQuotedEmpty: boolean): InternalCsvCellValue[] {
+		const values: InternalCsvCellValue[] = [];
 		let currentValue = "";
 		let insideQuotes = false;
+		let fieldWasQuoted = false;
 
 		for (let i = 0; i < line.length; i++) {
 			const char = line[i];
@@ -615,31 +634,45 @@ export class CsvStreamParser extends Transform {
 					i++;
 				} else {
 					insideQuotes = !insideQuotes;
+					fieldWasQuoted = true;
 				}
 			} else if (char === this.delimiter && !insideQuotes) {
-				values.push(currentValue);
+				values.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
 				currentValue = "";
+				fieldWasQuoted = false;
 			} else {
 				currentValue += char;
 			}
 		}
 
-		values.push(currentValue);
+		values.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
 		return values;
+	}
+
+	private finalizeParsedCellValue(
+		value: string,
+		fieldWasQuoted: boolean,
+		preserveQuotedEmpty: boolean
+	): InternalCsvCellValue {
+		if (preserveQuotedEmpty && fieldWasQuoted && value === "") {
+			return QUOTED_EMPTY_CELL;
+		}
+
+		return value;
 	}
 
 	/**
 	 * Create a record object from values array.
 	 */
-	private createRecord(values: string[]): Record<string, string> {
-		const record: Record<string, string> = {};
+	private createRecord(values: InternalCsvCellValue[]): InternalCsvRecord {
+		const record: InternalCsvRecord = {};
 		for (let i = 0; i < this.headers.length; i++) {
 			// Get the original column index for this filtered header
 			const originalIndex = this.includedIndices[i];
-			let value = originalIndex < values.length ? values[originalIndex] : "";
+			let value: InternalCsvCellValue = originalIndex < values.length ? values[originalIndex] : "";
 
 			// Apply default value if cell is empty
-			if (value === "" && this.options.defaultValues?.[this.headers[i]] !== undefined) {
+			if (isEmptyCsvCellValue(value) && this.options.defaultValues?.[this.headers[i]] !== undefined) {
 				value = this.options.defaultValues[this.headers[i]];
 			}
 
@@ -654,14 +687,17 @@ export class CsvStreamParser extends Transform {
 							record[header] = value;
 						}
 						break;
-					case "combine":
+					case "combine": {
 						// Combine into comma-separated values
+						const incoming = toPublicCsvCellValue(value);
 						if (header in record) {
-							record[header] = record[header] ? `${record[header]},${value}` : value;
+							const existing = toPublicCsvCellValue(record[header]);
+							record[header] = existing ? `${existing},${incoming}` : incoming;
 						} else {
-							record[header] = value;
+							record[header] = incoming;
 						}
 						break;
+					}
 					default:
 						// Just overwrite (default behavior)
 						record[header] = value;
@@ -674,12 +710,22 @@ export class CsvStreamParser extends Transform {
 		return record;
 	}
 
+	private toPublicRecord(record: InternalCsvRecord): CsvRecord {
+		const publicRecord: CsvRecord = {};
+
+		for (const [header, value] of Object.entries(record)) {
+			publicRecord[header] = toPublicCsvCellValue(value);
+		}
+
+		return publicRecord;
+	}
+
 	/**
 	 * Apply value transformations to a record.
 	 */
 	private applyTransformations(
-		record: Record<string, string>
-	): Record<string, string | number | boolean | Date | null | undefined> {
+		record: InternalCsvRecord
+	): Record<string, string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL> {
 		const {
 			autoParseNumbers,
 			preserveUnsafeIntegersAsString,
@@ -694,10 +740,23 @@ export class CsvStreamParser extends Transform {
 			return record;
 		}
 
-		const transformed: Record<string, string | number | boolean | Date | null | undefined> = {};
+		const transformed: Record<string, string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL> =
+			{};
 
 		for (const [header, value] of Object.entries(record)) {
-			let transformedValue: string | number | boolean | Date | null | undefined = value;
+			let transformedValue: string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL = value;
+
+			if (isQuotedEmptyCell(value)) {
+				if (nullValues !== undefined && this.nullSet.has("")) {
+					transformedValue = this.applyNullRepresentation(nullRepresentation);
+					if (nullRepresentation === "omit") {
+						continue;
+					}
+				}
+
+				transformed[header] = transformedValue;
+				continue;
+			}
 
 			// Handle empty values
 			if (value === "") {
@@ -826,12 +885,27 @@ export class CsvStreamParser extends Transform {
 	/**
 	 * Unflatten a record with dot-notation keys into a nested object.
 	 */
-	private unflatten(record: Record<string, string | number | boolean | Date | null | undefined>): NestedObject {
+	private unflatten(
+		record: Record<string, string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL>
+	): NestedObject {
 		const result: NestedObject = {};
+		const preserveEmptyColumns = this.options.preserveEmptyColumnAsEmptyString === true;
+		const preserveEmptyStrings = this.options.preserveEmptyString !== false;
 
 		for (const [key, value] of Object.entries(record)) {
-			// Skip empty strings and undefined, but preserve null as a valid value
-			if (value === "" || value === undefined) continue;
+			if (value === undefined) continue;
+
+			let normalizedValue: string | number | boolean | Date | null;
+
+			if (isQuotedEmptyCell(value)) {
+				if (!preserveEmptyStrings) continue;
+				normalizedValue = "";
+			} else if (value === "") {
+				if (!preserveEmptyColumns) continue;
+				normalizedValue = "";
+			} else {
+				normalizedValue = value;
+			}
 
 			// Remove array suffix if present
 			const arraySuffix = this.options.arraySuffixIndicator ?? "[]";
@@ -851,7 +925,7 @@ export class CsvStreamParser extends Transform {
 				current = current[part] as NestedObject;
 			}
 
-			current[parts[parts.length - 1]] = value;
+			current[parts[parts.length - 1]] = normalizedValue;
 		}
 
 		return result;

@@ -155,7 +155,7 @@ export abstract class CsvParser {
 	 * ```
 	 */
 	static parseString<T = NestedObject>(csvContent: string, options: CsvParserOptions = {}): T[] {
-		const records = CsvReader.parse(csvContent, options);
+		const records = CsvReader.parseWithQuotedEmptyProvenance(csvContent, options);
 		return NestedJsonConverter.convert(records, options) as T[];
 	}
 }

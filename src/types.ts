@@ -463,6 +463,27 @@ export interface CsvParserOptions {
 	nullRepresentation?: NullRepresentation;
 
 	/**
+	 * Preserve unquoted empty cells as empty strings in nested output.
+	 *
+	 * @remarks
+	 * This option only applies to unquoted empty columns such as `,,`.
+	 * Explicit quoted empty strings are controlled by `preserveEmptyString`.
+	 *
+	 * @default false
+	 */
+	preserveEmptyColumnAsEmptyString?: boolean;
+
+	/**
+	 * Preserve explicitly quoted empty strings as empty strings in nested output.
+	 *
+	 * @remarks
+	 * This option applies to values such as `""` (or the configured quote character equivalent).
+	 *
+	 * @default true
+	 */
+	preserveEmptyString?: boolean;
+
+	/**
 	 * Maximum number of records to parse.
 	 * Parsing stops after this limit is reached.
 	 * Useful for previewing large files or pagination.
