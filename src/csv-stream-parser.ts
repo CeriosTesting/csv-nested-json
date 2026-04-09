@@ -1,20 +1,13 @@
 import { Transform, type TransformCallback, type TransformOptions } from "node:stream";
-import { CsvDuplicateHeaderError } from "./errors";
-import type { CsvParserOptions, DuplicateHeaderStrategy, NestedObject, ProgressCallback } from "./types";
+import { CsvDuplicateHeaderError, CsvParseError } from "./errors";
+import { NestedJsonConverter } from "./nested-json-converter";
+import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, NestedObject, ProgressCallback } from "./types";
 
 /**
  * Options for the streaming CSV parser.
  * Extends standard TransformOptions with CSV-specific options.
  */
 export interface CsvStreamParserOptions extends CsvParserOptions, TransformOptions {
-	/**
-	 * Whether to emit nested objects (true) or flat records (false).
-	 * When true, records are converted using NestedJsonConverter logic.
-	 * When false, raw flat records are emitted.
-	 * @default true
-	 */
-	nested?: boolean;
-
 	/**
 	 * Callback function called periodically to report parsing progress.
 	 * Can be synchronous or asynchronous.
@@ -58,6 +51,13 @@ export interface CsvStreamParserOptions extends CsvParserOptions, TransformOptio
 	 * ```
 	 */
 	batchSize?: number;
+
+	/**
+	 * Maximum number of raw rows buffered for one continuation group.
+	 * Prevents unbounded memory growth when identifier values are missing.
+	 * @default 10000
+	 */
+	maxContinuationGroupSize?: number;
 }
 
 /**
@@ -67,9 +67,8 @@ export interface CsvStreamParserOptions extends CsvParserOptions, TransformOptio
  * This is ideal for processing very large CSV files that don't fit in memory.
  * The parser handles quoted fields that span multiple chunks correctly.
  *
- * Note: For true nested JSON conversion with continuation rows (rows that extend
- * previous records), consider using the standard CsvParser methods, as continuation
- * row handling requires buffering related rows together.
+ * By default, continuation rows (rows where the identifier column is empty) are
+ * grouped with the previous record to match `CsvParser` behavior.
  *
  * @example
  * ```typescript
@@ -133,6 +132,11 @@ export class CsvStreamParser extends Transform {
 	private batchSize: number;
 	private recordBatch: NestedObject[] = [];
 
+	// Continuation grouping
+	private groupedRecords: CsvRecord[] = [];
+	private groupingIdentifierColumn: string | null = null;
+	private maxContinuationGroupSize: number;
+
 	/**
 	 * Creates a new streaming CSV parser.
 	 *
@@ -165,6 +169,15 @@ export class CsvStreamParser extends Transform {
 		this.limit = options.limit ?? 0;
 		// Initialize batch processing
 		this.batchSize = options.batchSize ?? 1;
+		// Initialize continuation-group guard
+		const maxContinuationGroupSize = options.maxContinuationGroupSize;
+		if (maxContinuationGroupSize === undefined) {
+			this.maxContinuationGroupSize = 10000;
+		} else if (!Number.isInteger(maxContinuationGroupSize) || maxContinuationGroupSize < 1) {
+			throw new CsvParseError("maxContinuationGroupSize must be a positive integer.");
+		} else {
+			this.maxContinuationGroupSize = maxContinuationGroupSize;
+		}
 	}
 
 	/**
@@ -192,9 +205,9 @@ export class CsvStreamParser extends Transform {
 	 *
 	 * @example
 	 * ```typescript
-	 * // Get flat records instead of nested
-	 * const flatRecords = await CsvStreamParser.parseStream(stream, {
-	 *   nested: false
+	 * // Parse with stream-specific options
+	 * const records = await CsvStreamParser.parseStream(stream, {
+	 *   batchSize: 100
 	 * });
 	 * ```
 	 */
@@ -280,6 +293,11 @@ export class CsvStreamParser extends Transform {
 				this.processLine(this.buffer);
 			}
 
+			// Flush remaining continuation group before flushing batches.
+			if (this.shouldGroupContinuationRows() && !this.limitReached) {
+				this.flushGroupedRecords();
+			}
+
 			// Flush any remaining batch
 			if (this.batchSize > 1 && this.recordBatch.length > 0 && !this.limitReached) {
 				this.push(this.recordBatch);
@@ -301,6 +319,8 @@ export class CsvStreamParser extends Transform {
 		this.buffer = "";
 		this.headers = [];
 		this.recordBatch = [];
+		this.groupedRecords = [];
+		this.groupingIdentifierColumn = null;
 		this.duplicateIndices.clear();
 		this.includedIndices = [];
 		this.nullSet.clear();
@@ -410,6 +430,7 @@ export class CsvStreamParser extends Transform {
 			);
 			this.headers = processedHeaders;
 			this.duplicateIndices = duplicateIndices;
+			this.groupingIdentifierColumn = this.resolveGroupingIdentifierColumn();
 
 			this.headersProcessed = true;
 			return;
@@ -425,13 +446,115 @@ export class CsvStreamParser extends Transform {
 		}
 		this.dataRowIndex++;
 
+		if (this.shouldGroupContinuationRows()) {
+			this.bufferGroupedRecord(record);
+			return;
+		}
+
 		// Apply transformations if needed
 		const transformed = this.applyTransformations(record);
 
-		// Convert to nested if enabled (default)
-		const nested = this.options.nested !== false;
-		const outputRecord = nested ? this.unflatten(transformed) : transformed;
+		// Fallback path (not expected in current configuration): emit nested object.
+		const outputRecord = this.unflatten(transformed);
+		this.emitRecord(outputRecord as NestedObject);
+	}
 
+	/**
+	 * Whether continuation grouping should be applied for this parser instance.
+	 */
+	private shouldGroupContinuationRows(): boolean {
+		return true;
+	}
+
+	/**
+	 * Determine the column used for continuation grouping.
+	 */
+	private resolveGroupingIdentifierColumn(): string {
+		const configuredIdentifier = this.options.identifierColumn;
+		if (configuredIdentifier) {
+			if (this.headers.includes(configuredIdentifier)) {
+				return configuredIdentifier;
+			}
+
+			const availableColumns = this.headers.length > 0 ? this.headers.join(", ") : "(none)";
+
+			throw new CsvParseError(
+				`identifierColumn '${configuredIdentifier}' not found in headers. Available columns: ${availableColumns}`
+			);
+		}
+
+		if (this.headers.length === 0) {
+			throw new CsvParseError(
+				"No columns available after filtering. Cannot resolve identifier column for continuation row grouping."
+			);
+		}
+
+		return this.headers[0];
+	}
+
+	/**
+	 * Add a record to the active continuation group with memory guardrails.
+	 */
+	private pushGroupedRecord(record: CsvRecord): void {
+		if (this.groupedRecords.length >= this.maxContinuationGroupSize) {
+			const identifierColumn = this.groupingIdentifierColumn ?? this.options.identifierColumn ?? "(unknown)";
+			throw new CsvParseError(
+				`Continuation group exceeded maxContinuationGroupSize (${this.maxContinuationGroupSize}) while grouping by '${identifierColumn}'.`
+			);
+		}
+
+		this.groupedRecords.push(record);
+	}
+
+	/**
+	 * Buffer records and flush groups when a new identifier value is encountered.
+	 */
+	private bufferGroupedRecord(record: CsvRecord): void {
+		const identifierColumn = this.groupingIdentifierColumn;
+		const identifierValue = identifierColumn ? record[identifierColumn] : undefined;
+		const startsNewGroup =
+			identifierValue !== undefined && identifierValue !== null && String(identifierValue).trim() !== "";
+
+		if (this.groupedRecords.length === 0) {
+			if (!startsNewGroup) {
+				const rowNumber = this.skipRows + this.dataRowIndex + 1;
+				throw new CsvParseError(
+					`Row ${rowNumber} is a continuation row, but no base row exists. Column '${identifierColumn ?? "(unknown)"}' must have a value to start a group.`
+				);
+			}
+
+			this.pushGroupedRecord(record);
+			return;
+		}
+
+		if (startsNewGroup) {
+			this.flushGroupedRecords();
+			if (this.limitReached) return;
+		}
+
+		this.pushGroupedRecord(record);
+	}
+
+	/**
+	 * Flush buffered grouped records through NestedJsonConverter.
+	 */
+	private flushGroupedRecords(): void {
+		if (this.groupedRecords.length === 0) return;
+
+		const recordsToFlush = this.groupedRecords;
+		this.groupedRecords = [];
+
+		const groupedOutput = NestedJsonConverter.convert(recordsToFlush, this.options);
+		for (const record of groupedOutput) {
+			this.emitRecord(record);
+			if (this.limitReached) return;
+		}
+	}
+
+	/**
+	 * Emit a single parsed output record while respecting batching, limits, and progress callbacks.
+	 */
+	private emitRecord(outputRecord: NestedObject): void {
 		// Handle batching
 		if (this.batchSize > 1) {
 			this.recordBatch.push(outputRecord as NestedObject);

@@ -535,6 +535,54 @@ describe("Array Suffix Indicator", () => {
 			]);
 		});
 
+		it("should keep child continuations for second parent item in nested forced arrays", () => {
+			const csvContent = `id,measurements[].code,measurements[].values[].energy
+1,CODE1,E1
+,,E2
+,,E3
+,CODE2,E4
+,,E5
+,,E6`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					measurements: [
+						{
+							code: "CODE1",
+							values: [{ energy: "E1" }, { energy: "E2" }, { energy: "E3" }],
+						},
+						{
+							code: "CODE2",
+							values: [{ energy: "E4" }, { energy: "E5" }, { energy: "E6" }],
+						},
+					],
+				},
+			]);
+		});
+
+		it("should keep triple-nested continuations for second top-level parent", () => {
+			const csvContent = `id,a[].name,a[].b[].name,a[].b[].c[]
+1,a1,b1,c1
+,,,c2
+,a2,b2,c3
+,,,c4`;
+
+			const result = CsvParser.parseString(csvContent);
+
+			expect(result).toEqual([
+				{
+					id: "1",
+					a: [
+						{ name: "a1", b: [{ name: "b1", c: ["c1", "c2"] }] },
+						{ name: "a2", b: [{ name: "b2", c: ["c3", "c4"] }] },
+					],
+				},
+			]);
+		});
+
 		it("should handle multiple parallel nested arrays", () => {
 			const csvContent = `id,items[].name,items[].tags[],items[].colors[]
 1,item1,tag1,red

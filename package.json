@@ -61,15 +61,15 @@
 	},
 	"devDependencies": {
 		"@arethetypeswrong/cli": "^0.18.2",
-		"@biomejs/biome": "2.3.6",
-		"@changesets/cli": "^2.29.7",
-		"@types/jest": "^29.5.5",
-		"@types/node": "^24.10.1",
+		"@biomejs/biome": "2.4.10",
+		"@changesets/cli": "^2.30.0",
+		"@types/jest": "^30.0.0",
+		"@types/node": "^25.5.2",
 		"husky": "^9.1.7",
-		"jest": "^29.7.0",
-		"lint-staged": "^16.2.6",
-		"npm-check-updates": "^19.1.2",
-		"ts-jest": "^29.4.5",
+		"jest": "^30.3.0",
+		"lint-staged": "^16.4.0",
+		"npm-check-updates": "^20.0.0",
+		"ts-jest": "^29.4.9",
 		"tsup": "^8.5.1",
 		"typescript": "^5.9.3"
 	}

@@ -173,18 +173,22 @@ export class JsonToCsv {
 			const fullKey = prefix ? `${prefix}.${key}` : key;
 
 			if (Array.isArray(value)) {
-				// For arrays, check the first element to determine structure
-				if (value.length > 0) {
-					const firstItem = value[0];
-					if (firstItem && typeof firstItem === "object" && !Array.isArray(firstItem)) {
-						// Array of objects - collect headers from first item
-						this.collectHeadersFromObject(firstItem as NestedObject, fullKey, headers);
-					} else {
-						// Array of primitives
-						headers.add(fullKey);
-					}
-				} else {
+				if (value.length === 0) {
 					// Empty array - still add the header
+					headers.add(fullKey);
+					continue;
+				}
+
+				let hasObjectItems = false;
+				for (const item of value) {
+					if (item && typeof item === "object" && !Array.isArray(item)) {
+						hasObjectItems = true;
+						this.collectHeadersFromObject(item as NestedObject, fullKey, headers);
+					}
+				}
+
+				if (!hasObjectItems) {
+					// Array of primitives
 					headers.add(fullKey);
 				}
 			} else if (value && typeof value === "object") {
@@ -270,6 +274,8 @@ export class JsonToCsv {
 		flatValues: Record<string, NestedValue>,
 		arrayValues: Record<string, NestedValue[]>
 	): Record<string, string>[] {
+		const arrayPaths = Object.keys(arrayValues).sort((a, b) => b.length - a.length);
+
 		// Determine the maximum array length
 		let maxArrayLength = 1;
 		for (const arr of Object.values(arrayValues)) {
@@ -284,24 +290,20 @@ export class JsonToCsv {
 			const row: Record<string, string> = {};
 
 			for (const header of headers) {
-				if (header in arrayValues) {
-					const arr = arrayValues[header];
+				const arrayPath = this.findArrayPathForHeader(header, arrayPaths);
+
+				if (arrayPath) {
+					const arr = arrayValues[arrayPath];
 					if (i < arr.length) {
 						const item = arr[i];
-						if (item && typeof item === "object" && !Array.isArray(item)) {
-							// Array of objects - flatten this item
-							const itemFlat: Record<string, NestedValue> = {};
-							const itemArrays: Record<string, NestedValue[]> = {};
-							this.flattenToPathValues(item as NestedObject, header, itemFlat, itemArrays);
-
-							// Add flattened values to this row
-							for (const [path, val] of Object.entries(itemFlat)) {
-								if (headers.includes(path)) {
-									row[path] = this.valueToString(val);
-								}
-							}
+						if (header === arrayPath) {
+							row[header] = this.valueToString(item as NestedValue);
+						} else if (item && typeof item === "object" && !Array.isArray(item)) {
+							const relativePath = header.slice(arrayPath.length + 1);
+							const nestedValue = this.getNestedValueAtPath(item as NestedObject, relativePath);
+							row[header] = nestedValue === undefined ? "" : this.valueToString(nestedValue);
 						} else {
-							row[header] = this.valueToString(item);
+							row[header] = "";
 						}
 					} else {
 						row[header] = "";
@@ -318,6 +320,40 @@ export class JsonToCsv {
 		}
 
 		return rows;
+	}
+
+	/**
+	 * Resolve which array path (if any) owns a header.
+	 */
+	private static findArrayPathForHeader(header: string, arrayPaths: string[]): string | null {
+		for (const path of arrayPaths) {
+			if (header === path || header.startsWith(`${path}.`)) {
+				return path;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Read a nested value from an object using dot-notation.
+	 */
+	private static getNestedValueAtPath(obj: NestedObject, path: string): NestedValue | undefined {
+		if (!path) return obj;
+
+		const parts = path.split(".");
+		let current: NestedValue = obj;
+
+		for (const part of parts) {
+			if (current === null || current === undefined) return undefined;
+			if (typeof current !== "object" || Array.isArray(current) || current instanceof Date) {
+				return undefined;
+			}
+
+			current = (current as NestedObject)[part];
+		}
+
+		return current;
 	}
 
 	/**

@@ -194,11 +194,30 @@ describe("JsonToCsv", () => {
 
 			const result = JsonToCsv.stringify(data);
 
-			// Check headers exist
+			// Check headers and values are emitted for object-array rows
 			expect(result).toContain("phones.type");
 			expect(result).toContain("phones.number");
-			// Note: The actual structure of nested arrays of objects may vary
-			// based on implementation - just verify headers are present
+			expect(result).toContain("mobile");
+			expect(result).toContain("home");
+			expect(result).toContain("555-0001");
+			expect(result).toContain("555-0002");
+		});
+
+		it("should include headers that only appear in later object-array elements", () => {
+			const data = [
+				{
+					id: "1",
+					phones: [
+						{ type: "mobile", number: "555-0001", extension: "" },
+						{ type: "home", number: "555-0002", extension: "123" },
+					],
+				},
+			];
+
+			const result = JsonToCsv.stringify(data);
+
+			expect(result).toContain("phones.extension");
+			expect(result).toContain("123");
 		});
 
 		it("should handle empty arrays", () => {
