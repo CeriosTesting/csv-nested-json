@@ -506,8 +506,8 @@ Line 2"`;
 				records.push(record as NestedObject);
 			}
 
-			// Empty values are omitted
-			expect(records).toEqual([{ id: "1" }]);
+			// Explicit quoted empties are preserved by default
+			expect(records).toEqual([{ id: "1", value: "" }]);
 		});
 	});
 
@@ -672,6 +672,55 @@ g1,2,c`;
 			}
 
 			expect(records).toEqual([{ id: "1", name: "Alice" }]);
+		});
+
+		it("should preserve only unquoted empty columns when configured", async () => {
+			const csvContent = 'id,emptyColumn,emptyQuoted\n1,,""';
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({
+				preserveEmptyColumnAsEmptyString: true,
+				preserveEmptyString: false,
+			});
+
+			const records: NestedObject[] = [];
+			for await (const record of stream.pipe(parser)) {
+				records.push(record as NestedObject);
+			}
+
+			expect(records).toEqual([{ id: "1", emptyColumn: "" }]);
+		});
+
+		it("should preserve only quoted empty strings when configured", async () => {
+			const csvContent = 'id,emptyColumn,emptyQuoted\n1,,""';
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({
+				preserveEmptyString: true,
+			});
+
+			const records: NestedObject[] = [];
+			for await (const record of stream.pipe(parser)) {
+				records.push(record as NestedObject);
+			}
+
+			expect(records).toEqual([{ id: "1", emptyQuoted: "" }]);
+		});
+
+		it("should treat quoted-empty identifier values as continuation rows", async () => {
+			const csvContent = 'id,tags[]\n1,a\n"",b\n2,c';
+			const stream = Readable.from([csvContent]);
+			const parser = new CsvStreamParser({
+				preserveEmptyString: true,
+			});
+
+			const records: NestedObject[] = [];
+			for await (const record of stream.pipe(parser)) {
+				records.push(record as NestedObject);
+			}
+
+			expect(records).toEqual([
+				{ id: "1", tags: ["a", "b"] },
+				{ id: "2", tags: ["c"] },
+			]);
 		});
 
 		it("should throw when row with all empty values starts a group", async () => {
