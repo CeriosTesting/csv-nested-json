@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { Readable } from "node:stream";
+
 import { CsvFileNotFoundError } from "./errors";
 import type { CsvParserOptions } from "./types";
 

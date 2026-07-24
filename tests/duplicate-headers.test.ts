@@ -1,4 +1,7 @@
 import { Readable } from "node:stream";
+
+import { describe, expect, it } from "vitest";
+
 import { CsvDuplicateHeaderError, CsvParser, CsvStreamParser } from "../src";
 
 describe("Duplicate Header Handling", () => {
@@ -17,7 +20,7 @@ describe("Duplicate Header Handling", () => {
 			const csv = "id,name,id,name\n1,Alice,2,Bob";
 			try {
 				CsvParser.parseString(csv);
-				fail("Expected CsvDuplicateHeaderError to be thrown");
+				expect.fail("Expected CsvDuplicateHeaderError to be thrown");
 			} catch (error) {
 				expect(error).toBeInstanceOf(CsvDuplicateHeaderError);
 				const dupError = error as CsvDuplicateHeaderError;
@@ -30,7 +33,7 @@ describe("Duplicate Header Handling", () => {
 			const csv = "id,name,id\n1,Alice,2";
 			try {
 				CsvParser.parseString(csv);
-				fail("Expected CsvDuplicateHeaderError to be thrown");
+				expect.fail("Expected CsvDuplicateHeaderError to be thrown");
 			} catch (error) {
 				expect(error).toBeInstanceOf(CsvDuplicateHeaderError);
 				const dupError = error as CsvDuplicateHeaderError;
@@ -43,7 +46,7 @@ describe("Duplicate Header Handling", () => {
 			const csv = "metadata\nid,name,id\n1,Alice,2";
 			try {
 				CsvParser.parseString(csv, { skipRows: 1 });
-				fail("Expected CsvDuplicateHeaderError to be thrown");
+				expect.fail("Expected CsvDuplicateHeaderError to be thrown");
 			} catch (error) {
 				expect(error).toBeInstanceOf(CsvDuplicateHeaderError);
 				const dupError = error as CsvDuplicateHeaderError;

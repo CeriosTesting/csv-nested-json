@@ -1,4 +1,5 @@
 import fs from "node:fs";
+
 import type { CsvParserOptions, NestedObject, NestedValue } from "./types";
 
 /**

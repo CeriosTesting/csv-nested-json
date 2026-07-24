@@ -37,10 +37,10 @@ npm install @cerios/csv-nested-json
 ## 🎯 Quick Start
 
 ```typescript
-import { CsvParser } from '@cerios/csv-nested-json';
+import { CsvParser } from "@cerios/csv-nested-json";
 
 // Parse CSV file
-const result = CsvParser.parseFileSync('data.csv');
+const result = CsvParser.parseFileSync("data.csv");
 console.log(result);
 
 // Output:
@@ -59,28 +59,28 @@ console.log(result);
 
 ## 📖 API Reference
 
-| Method | Description |
-|--------|-------------|
-| `CsvParser.parseFileSync()` | Parse CSV file synchronously |
-| `CsvParser.parseFile()` | Parse CSV file asynchronously |
-| `CsvParser.parseString()` | Parse CSV string content |
-| `CsvParser.parseStream()` | Parse CSV from readable stream (buffers full content in memory) |
-| `CsvStreamParser` | True streaming parser for very large files |
-| `CsvReader.parse()` | Low-level CSV parser that returns flat records |
-| `CsvFileReader.readFile*()` | Low-level file/stream text reader |
-| `NestedJsonConverter.convert()` | Low-level flat-record to nested JSON converter |
-| `JsonToCsv.stringify()` | Convert JSON objects to CSV string |
-| `JsonToCsv.writeFileSync()` | Write JSON objects to CSV file (sync) |
-| `JsonToCsv.writeFile()` | Write JSON objects to CSV file (async) |
+| Method                          | Description                                                     |
+| ------------------------------- | --------------------------------------------------------------- |
+| `CsvParser.parseFileSync()`     | Parse CSV file synchronously                                    |
+| `CsvParser.parseFile()`         | Parse CSV file asynchronously                                   |
+| `CsvParser.parseString()`       | Parse CSV string content                                        |
+| `CsvParser.parseStream()`       | Parse CSV from readable stream (buffers full content in memory) |
+| `CsvStreamParser`               | True streaming parser for very large files                      |
+| `CsvReader.parse()`             | Low-level CSV parser that returns flat records                  |
+| `CsvFileReader.readFile*()`     | Low-level file/stream text reader                               |
+| `NestedJsonConverter.convert()` | Low-level flat-record to nested JSON converter                  |
+| `JsonToCsv.stringify()`         | Convert JSON objects to CSV string                              |
+| `JsonToCsv.writeFileSync()`     | Write JSON objects to CSV file (sync)                           |
+| `JsonToCsv.writeFile()`         | Write JSON objects to CSV file (async)                          |
 
 ## 🔧 Basic Usage
 
 ### 1. Parse File (Synchronous)
 
 ```typescript
-import { CsvParser } from '@cerios/csv-nested-json';
+import { CsvParser } from "@cerios/csv-nested-json";
 
-const result = CsvParser.parseFileSync('./data.csv');
+const result = CsvParser.parseFileSync("./data.csv");
 ```
 
 **When to use:** Small to medium files (<10MB), synchronous workflows, simple scripts.
@@ -88,9 +88,9 @@ const result = CsvParser.parseFileSync('./data.csv');
 ### 2. Parse File (Asynchronous)
 
 ```typescript
-import { CsvParser } from '@cerios/csv-nested-json';
+import { CsvParser } from "@cerios/csv-nested-json";
 
-const result = await CsvParser.parseFile('./data.csv');
+const result = await CsvParser.parseFile("./data.csv");
 ```
 
 **When to use:** Medium to large files, async/await workflows, web servers, non-blocking operations.
@@ -98,7 +98,7 @@ const result = await CsvParser.parseFile('./data.csv');
 ### 3. Parse String
 
 ```typescript
-import { CsvParser } from '@cerios/csv-nested-json';
+import { CsvParser } from "@cerios/csv-nested-json";
 
 const csvString = `id,name,age
 1,Alice,30
@@ -112,10 +112,10 @@ const result = CsvParser.parseString(csvString);
 ### 4. Parse Stream
 
 ```typescript
-import { CsvParser } from '@cerios/csv-nested-json';
-import { createReadStream } from 'node:fs';
+import { CsvParser } from "@cerios/csv-nested-json";
+import { createReadStream } from "node:fs";
 
-const stream = createReadStream('./large-file.csv');
+const stream = createReadStream("./large-file.csv");
 const result = await CsvParser.parseStream(stream);
 ```
 
@@ -128,33 +128,33 @@ const result = await CsvParser.parseStream(stream);
 For very large files where you want streaming processing without loading everything into memory (continuation rows are grouped by default):
 
 ```typescript
-import { CsvStreamParser } from '@cerios/csv-nested-json';
-import { createReadStream } from 'node:fs';
+import { CsvStreamParser } from "@cerios/csv-nested-json";
+import { createReadStream } from "node:fs";
 
 const parser = new CsvStreamParser({
-  autoParseNumbers: true,
-  autoParseBooleans: true
+	autoParseNumbers: true,
+	autoParseBooleans: true,
 });
 
 // Using async iteration
-const stream = createReadStream('./very-large-file.csv');
+const stream = createReadStream("./very-large-file.csv");
 for await (const record of stream.pipe(parser)) {
-  console.log('Parsed record:', record);
-  // Process each record as it's parsed
+	console.log("Parsed record:", record);
+	// Process each record as it's parsed
 }
 
 // Or using events
-createReadStream('./very-large-file.csv')
-  .pipe(new CsvStreamParser())
-  .on('data', (record) => {
-    console.log('Record:', record);
-  })
-  .on('end', () => {
-    console.log('Done!');
-  })
-  .on('error', (err) => {
-    console.error('Error:', err);
-  });
+createReadStream("./very-large-file.csv")
+	.pipe(new CsvStreamParser())
+	.on("data", record => {
+		console.log("Record:", record);
+	})
+	.on("end", () => {
+		console.log("Done!");
+	})
+	.on("error", err => {
+		console.error("Error:", err);
+	});
 ```
 
 **When to use:** Files too large to fit in memory, real-time processing, ETL pipelines.
@@ -164,24 +164,25 @@ createReadStream('./very-large-file.csv')
 Track parsing progress for large files:
 
 ```typescript
-import { CsvStreamParser, ProgressInfo } from '@cerios/csv-nested-json';
-import { createReadStream } from 'node:fs';
+import { CsvStreamParser, ProgressInfo } from "@cerios/csv-nested-json";
+import { createReadStream } from "node:fs";
 
 const parser = new CsvStreamParser({
-  progressCallback: (progress: ProgressInfo) => {
-    console.log(`Processed ${progress.recordsEmitted} records`);
-    console.log(`Bytes: ${progress.bytesProcessed}`);
-    console.log(`Elapsed: ${progress.elapsedMs}ms`);
-  },
-  progressInterval: 1000  // Call every 1000 records (default: 100)
+	progressCallback: (progress: ProgressInfo) => {
+		console.log(`Processed ${progress.recordsEmitted} records`);
+		console.log(`Bytes: ${progress.bytesProcessed}`);
+		console.log(`Elapsed: ${progress.elapsedMs}ms`);
+	},
+	progressInterval: 1000, // Call every 1000 records (default: 100)
 });
 
-for await (const record of createReadStream('./large.csv').pipe(parser)) {
-  // Process record
+for await (const record of createReadStream("./large.csv").pipe(parser)) {
+	// Process record
 }
 ```
 
 The `ProgressInfo` object contains:
+
 - `bytesProcessed`: Total bytes read so far
 - `recordsEmitted`: Number of records emitted
 - `headersProcessed`: Whether headers have been parsed
@@ -192,41 +193,41 @@ The `ProgressInfo` object contains:
 Process records in batches for memory-efficient streaming:
 
 ```typescript
-import { CsvStreamParser } from '@cerios/csv-nested-json';
-import { createReadStream } from 'node:fs';
+import { CsvStreamParser } from "@cerios/csv-nested-json";
+import { createReadStream } from "node:fs";
 
 const parser = new CsvStreamParser({
-  batchSize: 100  // Emit arrays of 100 records
+	batchSize: 100, // Emit arrays of 100 records
 });
 
-for await (const batch of createReadStream('./large.csv').pipe(parser)) {
-  // batch is an array of up to 100 records
-  await processBatch(batch);
+for await (const batch of createReadStream("./large.csv").pipe(parser)) {
+	// batch is an array of up to 100 records
+	await processBatch(batch);
 }
 
 // Note: parseStream() always returns a flat array regardless of batchSize
 const allRecords = await CsvStreamParser.parseStream(
-  createReadStream('./data.csv'),
-  { batchSize: 100 }  // Batching used internally, result is flattened
+	createReadStream("./data.csv"),
+	{ batchSize: 100 } // Batching used internally, result is flattened
 );
 ```
 
 ### 6. Convert JSON to CSV
 
 ```typescript
-import { JsonToCsv } from '@cerios/csv-nested-json';
+import { JsonToCsv } from "@cerios/csv-nested-json";
 
 const data = [
-  {
-    id: '1',
-    name: 'Alice',
-    address: { city: 'NYC', zip: '10001' }
-  },
-  {
-    id: '2',
-    name: 'Bob',
-    address: { city: 'LA', zip: '90001' }
-  }
+	{
+		id: "1",
+		name: "Alice",
+		address: { city: "NYC", zip: "10001" },
+	},
+	{
+		id: "2",
+		name: "Bob",
+		address: { city: "LA", zip: "90001" },
+	},
 ];
 
 // Convert to CSV string
@@ -238,10 +239,10 @@ console.log(csvString);
 // 2,Bob,LA,90001
 
 // Write directly to file
-JsonToCsv.writeFileSync('./output.csv', data);
+JsonToCsv.writeFileSync("./output.csv", data);
 
 // Or async
-await JsonToCsv.writeFile('./output.csv', data);
+await JsonToCsv.writeFile("./output.csv", data);
 ```
 
 ## 🎯 Advanced Examples
@@ -249,6 +250,7 @@ await JsonToCsv.writeFile('./output.csv', data);
 ### Simple Flat CSV
 
 **Input CSV:**
+
 ```csv
 id,name,email
 1,John Doe,john@example.com
@@ -256,46 +258,50 @@ id,name,email
 ```
 
 **Output JSON:**
+
 ```json
 [
-  {
-    "id": "1",
-    "name": "John Doe",
-    "email": "john@example.com"
-  },
-  {
-    "id": "2",
-    "name": "Jane Smith",
-    "email": "jane@example.com"
-  }
+	{
+		"id": "1",
+		"name": "John Doe",
+		"email": "john@example.com"
+	},
+	{
+		"id": "2",
+		"name": "Jane Smith",
+		"email": "jane@example.com"
+	}
 ]
 ```
 
 ### Nested Objects with Dot Notation
 
 **Input CSV:**
+
 ```csv
 id,name,address.street,address.city,address.zip
 1,John Doe,123 Main St,New York,10001
 ```
 
 **Code:**
+
 ```typescript
-const result = CsvParser.parseFileSync('./nested-data.csv');
+const result = CsvParser.parseFileSync("./nested-data.csv");
 ```
 
 **Output JSON:**
+
 ```json
 [
-  {
-    "id": "1",
-    "name": "John Doe",
-    "address": {
-      "street": "123 Main St",
-      "city": "New York",
-      "zip": "10001"
-    }
-  }
+	{
+		"id": "1",
+		"name": "John Doe",
+		"address": {
+			"street": "123 Main St",
+			"city": "New York",
+			"zip": "10001"
+		}
+	}
 ]
 ```
 
@@ -304,6 +310,7 @@ const result = CsvParser.parseFileSync('./nested-data.csv');
 Rows without a value in the first column are treated as continuation rows and automatically create arrays:
 
 **Input CSV:**
+
 ```csv
 id,name,phones.type,phones.number
 1,Alice,mobile,555-0001
@@ -312,54 +319,59 @@ id,name,phones.type,phones.number
 ```
 
 **Code:**
+
 ```typescript
-const result = CsvParser.parseFileSync('./grouped-data.csv');
+const result = CsvParser.parseFileSync("./grouped-data.csv");
 ```
 
 **Output JSON:**
+
 ```json
 [
-  {
-    "id": "1",
-    "name": "Alice",
-    "phones": [
-      { "type": "mobile", "number": "555-0001" },
-      { "type": "home", "number": "555-0002" },
-      { "type": "work", "number": "555-0003" }
-    ]
-  }
+	{
+		"id": "1",
+		"name": "Alice",
+		"phones": [
+			{ "type": "mobile", "number": "555-0001" },
+			{ "type": "home", "number": "555-0002" },
+			{ "type": "work", "number": "555-0003" }
+		]
+	}
 ]
 ```
 
 ### Deeply Nested Structures
 
 **Input CSV:**
+
 ```csv
 id,user.name,user.profile.age,user.profile.address.city,user.profile.address.zip
 1,Alice,30,New York,10001
 ```
 
 **Code:**
+
 ```typescript
 const result = CsvParser.parseString(csvContent);
 ```
 
 **Output JSON:**
+
 ```json
 [
-  {
-    "id": "1",
-    "user": {
-      "name": "Alice",
-      "profile": {
-        "age": "30",
-        "address": {
-          "city": "New York",
-          "zip": "10001"
-        }
-      }
-    }
-  }
+	{
+		"id": "1",
+		"user": {
+			"name": "Alice",
+			"profile": {
+				"age": "30",
+				"address": {
+					"city": "New York",
+					"zip": "10001"
+				}
+			}
+		}
+	}
 ]
 ```
 
@@ -368,6 +380,7 @@ const result = CsvParser.parseString(csvContent);
 Use the `[]` suffix in headers to force a field to always be an array, even with a single value:
 
 **Input CSV:**
+
 ```csv
 id,name,tags[]
 1,Alice,javascript
@@ -375,15 +388,17 @@ id,name,tags[]
 ```
 
 **Code:**
+
 ```typescript
 const result = CsvParser.parseString(csvContent);
 ```
 
 **Output JSON:**
+
 ```json
 [
-  { "id": "1", "name": "Alice", "tags": ["javascript"] },
-  { "id": "2", "name": "Bob", "tags": ["python"] }
+	{ "id": "1", "name": "Alice", "tags": ["javascript"] },
+	{ "id": "2", "name": "Bob", "tags": ["python"] }
 ]
 ```
 
@@ -395,8 +410,8 @@ const csvContent = `id,name,age,price,active,verified
 2,Bob,25,29.99,false,TRUE`;
 
 const result = CsvParser.parseString(csvContent, {
-  autoParseNumbers: true,
-  autoParseBooleans: true
+	autoParseNumbers: true,
+	autoParseBooleans: true,
 });
 
 // Result:
@@ -415,7 +430,7 @@ const csvContent = `id,name,createdAt,updatedAt
 1,Alice,2024-01-15,2024-06-30T10:30:00Z`;
 
 const result = CsvParser.parseString(csvContent, {
-  autoParseDates: true
+	autoParseDates: true,
 });
 
 // Result:
@@ -437,13 +452,13 @@ const csvContent = `id,name,email
 2,bob,bob@example.com`;
 
 const result = CsvParser.parseString(csvContent, {
-  valueTransformer: (value, header) => {
-    // Uppercase names
-    if (header === 'name' && typeof value === 'string') {
-      return value.toUpperCase();
-    }
-    return value;
-  }
+	valueTransformer: (value, header) => {
+		// Uppercase names
+		if (header === "name" && typeof value === "string") {
+			return value.toUpperCase();
+		}
+		return value;
+	},
 });
 
 // Result:
@@ -460,12 +475,10 @@ const csvContent = `User ID,First Name,Last Name,Email Address
 1,John,Doe,john@example.com`;
 
 const result = CsvParser.parseString(csvContent, {
-  // Convert headers to camelCase
-  headerTransformer: (header) => {
-    return header
-      .toLowerCase()
-      .replace(/\s+(.)/g, (_, c) => c.toUpperCase());
-  }
+	// Convert headers to camelCase
+	headerTransformer: header => {
+		return header.toLowerCase().replace(/\s+(.)/g, (_, c) => c.toUpperCase());
+	},
 });
 
 // Result:
@@ -479,11 +492,11 @@ const csvContent = `user_id,first_name,last_name
 1,John,Doe`;
 
 const result = CsvParser.parseString(csvContent, {
-  columnMapping: {
-    'user_id': 'id',
-    'first_name': 'firstName',
-    'last_name': 'lastName'
-  }
+	columnMapping: {
+		user_id: "id",
+		first_name: "firstName",
+		last_name: "lastName",
+	},
 });
 
 // Result:
@@ -502,10 +515,10 @@ const csvContent = `id,name,status
 4,Diana,pending`;
 
 const result = CsvParser.parseString(csvContent, {
-  rowFilter: (record, rowIndex) => {
-    // Only include active records
-    return record.status === 'active';
-  }
+	rowFilter: (record, rowIndex) => {
+		// Only include active records
+		return record.status === "active";
+	},
 });
 
 // Result:
@@ -526,13 +539,13 @@ const csvContent = `id,name,email,password,role
 
 // Include only specific columns
 const result1 = CsvParser.parseString(csvContent, {
-  includeColumns: ['id', 'name', 'email']
+	includeColumns: ["id", "name", "email"],
 });
 // Result: [{ id: "1", name: "Alice", email: "alice@example.com" }, ...]
 
 // Exclude sensitive columns
 const result2 = CsvParser.parseString(csvContent, {
-  excludeColumns: ['password']
+	excludeColumns: ["password"],
 });
 // Result: [{ id: "1", name: "Alice", email: "alice@example.com", role: "admin" }, ...]
 ```
@@ -547,31 +560,31 @@ const csvContent = `id,name,value,value,value
 
 // Keep first occurrence
 const result1 = CsvParser.parseString(csvContent, {
-  duplicateHeaders: 'first'
+	duplicateHeaders: "first",
 });
 // Result: [{ id: "1", name: "Test", value: "A" }]
 
 // Keep last occurrence
 const result2 = CsvParser.parseString(csvContent, {
-  duplicateHeaders: 'last'
+	duplicateHeaders: "last",
 });
 // Result: [{ id: "1", name: "Test", value: "C" }]
 
 // Combine into comma-separated string
 const result3 = CsvParser.parseString(csvContent, {
-  duplicateHeaders: 'combine'
+	duplicateHeaders: "combine",
 });
 // Result: [{ id: "1", name: "Test", value: "A,B,C" }]
 
 // Rename duplicates with suffix
 const result4 = CsvParser.parseString(csvContent, {
-  duplicateHeaders: 'rename'
+	duplicateHeaders: "rename",
 });
 // Result: [{ id: "1", name: "Test", value: "A", value_1: "B", value_2: "C" }]
 
 // Throw error on duplicates (default)
 const result5 = CsvParser.parseString(csvContent, {
-  duplicateHeaders: 'error'
+	duplicateHeaders: "error",
 });
 // Throws CsvDuplicateHeaderError
 ```
@@ -589,7 +602,7 @@ const csvContent = `id,name
 5,Eve`;
 
 const result = CsvParser.parseString(csvContent, {
-  limit: 3
+	limit: 3,
 });
 // Result: [{ id: "1", ... }, { id: "2", ... }, { id: "3", ... }]
 // Parsing stops after 3 records - efficient for large files
@@ -605,7 +618,7 @@ id,name,email
 2,Bob,bob@example.com`;
 
 const result = CsvParser.parseString(csvContent, {
-  skipRows: 2  // Skip the first 2 metadata rows
+	skipRows: 2, // Skip the first 2 metadata rows
 });
 
 // Result:
@@ -623,10 +636,10 @@ const csvContent = `id,name,status,country
 2,Bob,active,USA`;
 
 const result = CsvParser.parseString(csvContent, {
-  defaultValues: {
-    status: 'pending',
-    country: 'Unknown'
-  }
+	defaultValues: {
+		status: "pending",
+		country: "Unknown",
+	},
 });
 
 // Result:
@@ -646,21 +659,21 @@ const csvContent = `id,emptyColumn,emptyQuoted
 
 // Preserve only unquoted empties: ,, -> ''
 const preserveColumns = CsvParser.parseString(csvContent, {
-  preserveEmptyColumnAsEmptyString: true,
-  preserveEmptyString: false
+	preserveEmptyColumnAsEmptyString: true,
+	preserveEmptyString: false,
 });
 // [{ id: "1", emptyColumn: "" }]
 
 // Preserve only quoted empties: "" -> ''
 const preserveQuoted = CsvParser.parseString(csvContent, {
-  preserveEmptyString: true
+	preserveEmptyString: true,
 });
 // [{ id: "1", emptyQuoted: "" }]
 
 // Preserve both
 const preserveBoth = CsvParser.parseString(csvContent, {
-  preserveEmptyColumnAsEmptyString: true,
-  preserveEmptyString: true
+	preserveEmptyColumnAsEmptyString: true,
+	preserveEmptyString: true,
 });
 // [{ id: "1", emptyColumn: "", emptyQuoted: "" }]
 ```
@@ -681,8 +694,8 @@ const csvContent = `id,name,nickname
 3,Charlie,Bobby`;
 
 const result = CsvParser.parseString(csvContent, {
-  nullValues: ['null', 'NULL', 'N/A', 'n/a', ''],
-  nullRepresentation: 'null'  // or 'undefined', 'empty-string', 'omit'
+	nullValues: ["null", "NULL", "N/A", "n/a", ""],
+	nullRepresentation: "null", // or 'undefined', 'empty-string', 'omit'
 });
 
 // Result with nullRepresentation: 'null':
@@ -708,17 +721,18 @@ The parser automatically strips UTF-8 and UTF-16 BOM by default:
 
 ```typescript
 // BOM is automatically handled
-const result = CsvParser.parseFileSync('./windows-excel-export.csv');
+const result = CsvParser.parseFileSync("./windows-excel-export.csv");
 
 // Disable BOM stripping if needed
 const result2 = CsvParser.parseString(csvContent, {
-  stripBom: false
+	stripBom: false,
 });
 ```
 
 ### Complex Multi-Group Example
 
 **Input CSV:**
+
 ```csv
 id,username,profile.firstName,profile.lastName,addresses.type,addresses.city
 1,johndoe,John,Doe,home,New York
@@ -727,36 +741,36 @@ id,username,profile.firstName,profile.lastName,addresses.type,addresses.city
 ```
 
 **Code:**
+
 ```typescript
-const result = CsvParser.parseFileSync('./complex-data.csv');
+const result = CsvParser.parseFileSync("./complex-data.csv");
 ```
 
 **Output JSON:**
+
 ```json
 [
-  {
-    "id": "1",
-    "username": "johndoe",
-    "profile": {
-      "firstName": "John",
-      "lastName": "Doe"
-    },
-    "addresses": [
-      { "type": "home", "city": "New York" },
-      { "type": "work", "city": "Boston" }
-    ]
-  },
-  {
-    "id": "2",
-    "username": "janedoe",
-    "profile": {
-      "firstName": "Jane",
-      "lastName": "Doe"
-    },
-    "addresses": [
-      { "type": "home", "city": "Chicago" }
-    ]
-  }
+	{
+		"id": "1",
+		"username": "johndoe",
+		"profile": {
+			"firstName": "John",
+			"lastName": "Doe"
+		},
+		"addresses": [
+			{ "type": "home", "city": "New York" },
+			{ "type": "work", "city": "Boston" }
+		]
+	},
+	{
+		"id": "2",
+		"username": "janedoe",
+		"profile": {
+			"firstName": "Jane",
+			"lastName": "Doe"
+		},
+		"addresses": [{ "type": "home", "city": "Chicago" }]
+	}
 ]
 ```
 
@@ -765,33 +779,36 @@ const result = CsvParser.parseFileSync('./complex-data.csv');
 ### Custom Delimiters
 
 **Semicolon-separated values:**
+
 ```typescript
 const csvSemicolon = `id;name;city
 1;Alice;NYC
 2;Bob;LA`;
 
 const result = CsvParser.parseString(csvSemicolon, {
-  delimiter: ';'
+	delimiter: ";",
 });
 ```
 
 **Tab-separated values:**
+
 ```typescript
 const csvTab = `id\tname\tcity
 1\tAlice\tNYC`;
 
 const result = CsvParser.parseString(csvTab, {
-  delimiter: '\t'
+	delimiter: "\t",
 });
 ```
 
 **Pipe-separated values:**
+
 ```typescript
 const csvPipe = `id|name|city
 1|Alice|NYC`;
 
 const result = CsvParser.parseString(csvPipe, {
-  delimiter: '|'
+	delimiter: "|",
 });
 ```
 
@@ -803,7 +820,7 @@ const csvSingleQuote = `id,name,message
 2,Bob,'It''s working'`;
 
 const result = CsvParser.parseString(csvSingleQuote, {
-  quote: "'"
+	quote: "'",
 });
 ```
 
@@ -811,13 +828,13 @@ const result = CsvParser.parseString(csvSingleQuote, {
 
 ```typescript
 // Latin1 encoding
-const result = await CsvParser.parseFile('./data-latin1.csv', {
-  encoding: 'latin1'
+const result = await CsvParser.parseFile("./data-latin1.csv", {
+	encoding: "latin1",
 });
 
 // UTF-16LE encoding
-const result2 = await CsvParser.parseFile('./data-utf16.csv', {
-  encoding: 'utf16le'
+const result2 = await CsvParser.parseFile("./data-utf16.csv", {
+	encoding: "utf16le",
 });
 ```
 
@@ -826,21 +843,21 @@ const result2 = await CsvParser.parseFile('./data-utf16.csv', {
 ```typescript
 // Ignore extra columns silently
 const result1 = CsvParser.parseString(csvData, {
-  validationMode: 'ignore'
+	validationMode: "ignore",
 });
 
 // Warn about extra columns (default)
 const result2 = CsvParser.parseString(csvData, {
-  validationMode: 'warn'
+	validationMode: "warn",
 });
 
 // Throw error on extra columns
 try {
-  const result3 = CsvParser.parseString(csvData, {
-    validationMode: 'error'
-  });
+	const result3 = CsvParser.parseString(csvData, {
+		validationMode: "error",
+	});
 } catch (error) {
-  console.error('Validation error:', error.message);
+	console.error("Validation error:", error.message);
 }
 ```
 
@@ -848,33 +865,33 @@ try {
 
 ```typescript
 async function parseApiCsv() {
-  const response = await fetch('https://api.example.com/data.csv');
-  const csvString = await response.text();
+	const response = await fetch("https://api.example.com/data.csv");
+	const csvString = await response.text();
 
-  const data = CsvParser.parseString(csvString, {
-    validationMode: 'ignore'
-  });
+	const data = CsvParser.parseString(csvString, {
+		validationMode: "ignore",
+	});
 
-  return data;
+	return data;
 }
 ```
 
 ### Parse Large File with Streams
 
 ```typescript
-import { createReadStream } from 'node:fs';
+import { createReadStream } from "node:fs";
 
 async function parseLargeFile(filePath: string) {
-  const stream = createReadStream(filePath, {
-    highWaterMark: 64 * 1024 // 64KB chunks
-  });
+	const stream = createReadStream(filePath, {
+		highWaterMark: 64 * 1024, // 64KB chunks
+	});
 
-  const data = await CsvParser.parseStream(stream, {
-    validationMode: 'warn',
-    encoding: 'utf-8'
-  });
+	const data = await CsvParser.parseStream(stream, {
+		validationMode: "warn",
+		encoding: "utf-8",
+	});
 
-  return data;
+	return data;
 }
 ```
 
@@ -888,8 +905,8 @@ const europeanCsv = `id;name;price;location.city;location.country
 2;Product B;8,99;Berlin;Germany`;
 
 const result = CsvParser.parseString(europeanCsv, {
-  delimiter: ';',
-  validationMode: 'error'
+	delimiter: ";",
+	validationMode: "error",
 });
 
 // Result:
@@ -907,11 +924,9 @@ const result = CsvParser.parseString(europeanCsv, {
 ### Parse Multiple Files Concurrently
 
 ```typescript
-const files = ['data1.csv', 'data2.csv', 'data3.csv'];
+const files = ["data1.csv", "data2.csv", "data3.csv"];
 
-const results = await Promise.all(
-  files.map(file => CsvParser.parseFile(file))
-);
+const results = await Promise.all(files.map(file => CsvParser.parseFile(file)));
 ```
 
 ## 🧪 Options Reference
@@ -920,65 +935,65 @@ const results = await Promise.all(
 
 ```typescript
 interface CsvParserOptions {
-  // Validation
-  validationMode?: 'ignore' | 'warn' | 'error';  // Default: 'warn'
+	// Validation
+	validationMode?: "ignore" | "warn" | "error"; // Default: 'warn'
 
-  // Parsing
-  delimiter?: string;                             // Default: ','
-  quote?: string;                                 // Default: '"'
+	// Parsing
+	delimiter?: string; // Default: ','
+	quote?: string; // Default: '"'
 
-  // File I/O
-  encoding?: BufferEncoding;                      // Default: 'utf-8'
+	// File I/O
+	encoding?: BufferEncoding; // Default: 'utf-8'
 
-  // Row handling
-  skipRows?: number;                              // Default: 0
-  stripBom?: boolean;                             // Default: true
-  rowFilter?: (record, rowIndex) => boolean;      // Filter rows during parsing
-  limit?: number;                                 // Max records to parse
+	// Row handling
+	skipRows?: number; // Default: 0
+	stripBom?: boolean; // Default: true
+	rowFilter?: (record, rowIndex) => boolean; // Filter rows during parsing
+	limit?: number; // Max records to parse
 
-  // Column selection
-  includeColumns?: string[];                      // Include only these columns (matched against original CSV headers)
-  excludeColumns?: string[];                      // Exclude columns after includeColumns is applied
+	// Column selection
+	includeColumns?: string[]; // Include only these columns (matched against original CSV headers)
+	excludeColumns?: string[]; // Exclude columns after includeColumns is applied
 
-  // Duplicate header handling
-  duplicateHeaders?: DuplicateHeaderStrategy;     // Default: 'error'
+	// Duplicate header handling
+	duplicateHeaders?: DuplicateHeaderStrategy; // Default: 'error'
 
-  // Value transformations
-  autoParseNumbers?: boolean;                     // Default: false
-  preserveUnsafeIntegersAsString?: boolean;       // Default: false
-  autoParseBooleans?: boolean;                    // Default: false
-  autoParseDates?: boolean;                       // Default: false
-  valueTransformer?: (value, header) => any;      // Custom value transformer
+	// Value transformations
+	autoParseNumbers?: boolean; // Default: false
+	preserveUnsafeIntegersAsString?: boolean; // Default: false
+	autoParseBooleans?: boolean; // Default: false
+	autoParseDates?: boolean; // Default: false
+	valueTransformer?: (value, header) => any; // Custom value transformer
 
-  // Header transformations
-  headerTransformer?: (header) => string;         // Transform header names
-  columnMapping?: Record<string, string>;         // Rename columns
+	// Header transformations
+	headerTransformer?: (header) => string; // Transform header names
+	columnMapping?: Record<string, string>; // Rename columns
 
-  // Array handling
-  arraySuffixIndicator?: string;                  // Default: '[]'
-  emptyArrayBehavior?: 'empty-array' | 'omit';    // Default: 'omit'
+	// Array handling
+	arraySuffixIndicator?: string; // Default: '[]'
+	emptyArrayBehavior?: "empty-array" | "omit"; // Default: 'omit'
 
-  // Null handling
-  nullValues?: string[];                          // Values to treat as null
-  nullRepresentation?: 'null' | 'undefined' | 'empty-string' | 'omit';  // Default: 'omit'
+	// Null handling
+	nullValues?: string[]; // Values to treat as null
+	nullRepresentation?: "null" | "undefined" | "empty-string" | "omit"; // Default: 'omit'
 
-  // Default values
-  defaultValues?: Record<string, string>;         // Default values for empty cells
+	// Default values
+	defaultValues?: Record<string, string>; // Default values for empty cells
 
-  // Empty value preservation
-  preserveEmptyColumnAsEmptyString?: boolean;     // Preserve unquoted empties: ,,
-  preserveEmptyString?: boolean;                  // Preserve quoted empties: ""
+	// Empty value preservation
+	preserveEmptyColumnAsEmptyString?: boolean; // Preserve unquoted empties: ,,
+	preserveEmptyString?: boolean; // Preserve quoted empties: ""
 
-  // Row grouping
-  identifierColumn?: string;                      // Column for grouping continuation rows
+	// Row grouping
+	identifierColumn?: string; // Column for grouping continuation rows
 }
 
 // Streaming-specific options (CsvStreamParser)
 interface CsvStreamParserOptions extends CsvParserOptions {
-  batchSize?: number;                             // Emit records in batches
-  maxContinuationGroupSize?: number;              // Max raw rows buffered per continuation group (default: 10000)
-  progressCallback?: ProgressCallback;            // Progress tracking callback
-  progressInterval?: number;                      // Records between callbacks (default: 100)
+	batchSize?: number; // Emit records in batches
+	maxContinuationGroupSize?: number; // Max raw rows buffered per continuation group (default: 10000)
+	progressCallback?: ProgressCallback; // Progress tracking callback
+	progressInterval?: number; // Records between callbacks (default: 100)
 }
 ```
 
@@ -987,6 +1002,7 @@ interface CsvStreamParserOptions extends CsvParserOptions {
 #### `validationMode`
 
 Controls how the parser handles rows with more values than headers:
+
 - `'ignore'`: Silently ignore extra values
 - `'warn'` (default): Log a warning to console
 - `'error'`: Throw a `CsvValidationError`
@@ -994,6 +1010,7 @@ Controls how the parser handles rows with more values than headers:
 #### `delimiter`
 
 Field delimiter character. Common values:
+
 - `','` (default) - Comma-separated values
 - `';'` - Semicolon-separated values (common in Europe)
 - `'\t'` - Tab-separated values
@@ -1002,12 +1019,14 @@ Field delimiter character. Common values:
 #### `quote`
 
 Quote character for escaping fields containing delimiters or newlines:
+
 - `'"'` (default) - Double quotes
 - `"'"` - Single quotes
 
 #### `encoding`
 
 File encoding when reading from files or streams:
+
 - `'utf-8'` (default)
 - `'utf-16le'`
 - `'latin1'`
@@ -1034,8 +1053,8 @@ When used with `autoParseNumbers`, keeps integers outside JavaScript's safe inte
 
 ```typescript
 const result = CsvParser.parseString(csv, {
-  autoParseNumbers: true,
-  preserveUnsafeIntegersAsString: true
+	autoParseNumbers: true,
+	preserveUnsafeIntegersAsString: true,
 });
 
 // "9007199254740993" stays a string to avoid precision loss
@@ -1055,9 +1074,9 @@ Custom function to transform values after parsing. Called after auto-parse optio
 
 ```typescript
 valueTransformer: (value, header) => {
-  if (header === 'email') return value.toLowerCase();
-  return value;
-}
+	if (header === "email") return value.toLowerCase();
+	return value;
+};
 ```
 
 #### `headerTransformer`
@@ -1065,7 +1084,7 @@ valueTransformer: (value, header) => {
 Transform header names before processing. Useful for converting to camelCase, lowercase, etc.
 
 ```typescript
-headerTransformer: (header) => header.toLowerCase().replace(/\s+/g, '_')
+headerTransformer: header => header.toLowerCase().replace(/\s+/g, "_");
 ```
 
 #### `columnMapping`
@@ -1081,7 +1100,7 @@ columnMapping: { 'user_id': 'id', 'first_name': 'firstName' }
 Filter rows during parsing. More memory-efficient than filtering after parsing.
 
 ```typescript
-rowFilter: (record, rowIndex) => record.status === 'active'
+rowFilter: (record, rowIndex) => record.status === "active";
 ```
 
 #### `limit`
@@ -1089,7 +1108,7 @@ rowFilter: (record, rowIndex) => record.status === 'active'
 Maximum number of records to parse. Parsing stops after this limit is reached, which is efficient for large files when you only need a preview or first N records.
 
 ```typescript
-limit: 100  // Stop after 100 records
+limit: 100; // Stop after 100 records
 ```
 
 #### `includeColumns`
@@ -1097,7 +1116,7 @@ limit: 100  // Stop after 100 records
 Array of column names to include. Only these columns will be in the output.
 
 ```typescript
-includeColumns: ['id', 'name', 'email']  // Only include these columns
+includeColumns: ["id", "name", "email"]; // Only include these columns
 ```
 
 `includeColumns` and `excludeColumns` can be combined. Inclusion is applied first, then exclusion.
@@ -1108,7 +1127,7 @@ Column filtering matches original CSV header names before `headerTransformer` an
 Array of column names to exclude. All other columns will be included.
 
 ```typescript
-excludeColumns: ['password', 'secret']  // Exclude sensitive columns
+excludeColumns: ["password", "secret"]; // Exclude sensitive columns
 ```
 
 #### `duplicateHeaders`
@@ -1116,7 +1135,7 @@ excludeColumns: ['password', 'secret']  // Exclude sensitive columns
 Strategy for handling duplicate column names in CSV headers. Default: `'error'`
 
 ```typescript
-duplicateHeaders: 'rename'  // 'error' | 'rename' | 'combine' | 'first' | 'last'
+duplicateHeaders: "rename"; // 'error' | 'rename' | 'combine' | 'first' | 'last'
 ```
 
 - `'error'` (default): Throw `CsvDuplicateHeaderError` on duplicates
@@ -1135,7 +1154,7 @@ If `headerTransformer` or `columnMapping` is used, set `identifierColumn` to the
 
 ```typescript
 // Use 'productId' instead of first column to group rows
-identifierColumn: 'productId'
+identifierColumn: "productId";
 ```
 
 #### `maxContinuationGroupSize` (streaming only)
@@ -1146,7 +1165,7 @@ Maximum number of raw rows buffered for a single continuation group in `CsvStrea
 - When exceeded, parsing throws `CsvParseError`
 
 ```typescript
-maxContinuationGroupSize: 5000
+maxContinuationGroupSize: 5000;
 ```
 
 #### `arraySuffixIndicator`
@@ -1156,6 +1175,7 @@ Suffix in headers to force array type. Default: `'[]'`
 #### `emptyArrayBehavior`
 
 How to handle forced array fields with no values:
+
 - `'omit'` (default): Don't include the field
 - `'empty-array'`: Include as `[]`
 
@@ -1166,6 +1186,7 @@ Strings to interpret as null values. Null detection is disabled unless this opti
 #### `nullRepresentation`
 
 How to represent null values in output:
+
 - `'omit'` (default): Remove the field
 - `'null'`: Use JavaScript `null`
 - `'undefined'`: Use JavaScript `undefined`
@@ -1196,57 +1217,57 @@ Both options work for `CsvParser` and `CsvStreamParser`. Set `preserveEmptyStrin
 ### Complete Example with All Options
 
 ```typescript
-const result = await CsvParser.parseFile('./data.csv', {
-  // Validation
-  validationMode: 'error',
+const result = await CsvParser.parseFile("./data.csv", {
+	// Validation
+	validationMode: "error",
 
-  // Parsing
-  delimiter: ',',
-  quote: '"',
-  encoding: 'utf-8',
+	// Parsing
+	delimiter: ",",
+	quote: '"',
+	encoding: "utf-8",
 
-  // Row handling
-  skipRows: 2,
-  stripBom: true,
-  rowFilter: (record) => record.status !== 'deleted',
-  limit: 1000,
+	// Row handling
+	skipRows: 2,
+	stripBom: true,
+	rowFilter: record => record.status !== "deleted",
+	limit: 1000,
 
-  // Column selection
-  excludeColumns: ['password', 'secret'],
+	// Column selection
+	excludeColumns: ["password", "secret"],
 
-  // Duplicate header handling
-  duplicateHeaders: 'rename',
+	// Duplicate header handling
+	duplicateHeaders: "rename",
 
-  // Value transformations
-  autoParseNumbers: true,
-  autoParseBooleans: true,
-  autoParseDates: true,
-  valueTransformer: (value, header) => {
-    if (header === 'email') return value.toLowerCase();
-    return value;
-  },
+	// Value transformations
+	autoParseNumbers: true,
+	autoParseBooleans: true,
+	autoParseDates: true,
+	valueTransformer: (value, header) => {
+		if (header === "email") return value.toLowerCase();
+		return value;
+	},
 
-  // Header transformations
-  headerTransformer: (h) => h.toLowerCase().replace(/\s+/g, '_'),
-  columnMapping: { 'user_id': 'id' },
+	// Header transformations
+	headerTransformer: h => h.toLowerCase().replace(/\s+/g, "_"),
+	columnMapping: { user_id: "id" },
 
-  // Row grouping
-  identifierColumn: 'id',
+	// Row grouping
+	identifierColumn: "id",
 
-  // Array handling
-  arraySuffixIndicator: '[]',
-  emptyArrayBehavior: 'empty-array',
+	// Array handling
+	arraySuffixIndicator: "[]",
+	emptyArrayBehavior: "empty-array",
 
-  // Null handling
-  nullValues: ['null', 'N/A', '-'],
-  nullRepresentation: 'null',
+	// Null handling
+	nullValues: ["null", "N/A", "-"],
+	nullRepresentation: "null",
 
-  // Defaults
-  defaultValues: { status: 'pending' },
+	// Defaults
+	defaultValues: { status: "pending" },
 
-  // Empty value preservation
-  preserveEmptyColumnAsEmptyString: true,
-  preserveEmptyString: true
+	// Empty value preservation
+	preserveEmptyColumnAsEmptyString: true,
+	preserveEmptyString: true,
 });
 ```
 
@@ -1275,34 +1296,34 @@ Parses CSV from a readable stream and returns all records. This method buffers t
 A Transform stream that parses CSV data chunk by chunk, emitting records as they become available.
 
 ```typescript
-import { CsvStreamParser, ProgressInfo } from '@cerios/csv-nested-json';
+import { CsvStreamParser, ProgressInfo } from "@cerios/csv-nested-json";
 
 const parser = new CsvStreamParser({
-  autoParseNumbers: true,
-  limit: 1000,            // Stop after 1000 records
-  batchSize: 100,         // Emit in batches of 100
-  maxContinuationGroupSize: 10000, // Safety guard for continuation buffering
-  progressCallback: (info: ProgressInfo) => {
-    console.log(`Progress: ${info.recordsEmitted} records, ${info.elapsedMs}ms`);
-  },
-  progressInterval: 500,  // Call progress every 500 records
-  // ... other CsvParserOptions
+	autoParseNumbers: true,
+	limit: 1000, // Stop after 1000 records
+	batchSize: 100, // Emit in batches of 100
+	maxContinuationGroupSize: 10000, // Safety guard for continuation buffering
+	progressCallback: (info: ProgressInfo) => {
+		console.log(`Progress: ${info.recordsEmitted} records, ${info.elapsedMs}ms`);
+	},
+	progressInterval: 500, // Call progress every 500 records
+	// ... other CsvParserOptions
 });
 
-createReadStream('./large.csv')
-  .pipe(parser)
-  .on('data', (record) => console.log(record))
-  .on('end', () => console.log('Done'));
+createReadStream("./large.csv")
+	.pipe(parser)
+	.on("data", record => console.log(record))
+	.on("end", () => console.log("Done"));
 ```
 
 #### Static Promise API
 
 ```typescript
 // Parse stream and collect all records
-const records = await CsvStreamParser.parseStream(
-  createReadStream('./data.csv'),
-  { autoParseNumbers: true, limit: 100 }
-);
+const records = await CsvStreamParser.parseStream(createReadStream("./data.csv"), {
+	autoParseNumbers: true,
+	limit: 100,
+});
 ```
 
 ### JsonToCsv Class
@@ -1320,16 +1341,14 @@ Write objects to CSV file synchronously.
 Write objects to CSV file asynchronously.
 
 ```typescript
-import { JsonToCsv } from '@cerios/csv-nested-json';
+import { JsonToCsv } from "@cerios/csv-nested-json";
 
-const data = [
-  { id: 1, user: { name: 'Alice', age: 30 }, tags: ['js', 'ts'] }
-];
+const data = [{ id: 1, user: { name: "Alice", age: 30 }, tags: ["js", "ts"] }];
 
 const csv = JsonToCsv.stringify(data, {
-  delimiter: ',',
-  quote: '"',
-  arrayMode: 'rows'  // 'rows' (continuation rows) or 'json' (stringify arrays)
+	delimiter: ",",
+	quote: '"',
+	arrayMode: "rows", // 'rows' (continuation rows) or 'json' (stringify arrays)
 });
 ```
 
@@ -1339,30 +1358,30 @@ The library provides custom error classes for better error handling:
 
 ```typescript
 import {
-  CsvParseError,
-  CsvFileNotFoundError,
-  CsvValidationError,
-  CsvEncodingError,
-  CsvDuplicateHeaderError
-} from '@cerios/csv-nested-json';
+	CsvParseError,
+	CsvFileNotFoundError,
+	CsvValidationError,
+	CsvEncodingError,
+	CsvDuplicateHeaderError,
+} from "@cerios/csv-nested-json";
 
 try {
-  const result = CsvParser.parseFileSync('./data.csv', {
-    validationMode: 'error'
-  });
+	const result = CsvParser.parseFileSync("./data.csv", {
+		validationMode: "error",
+	});
 } catch (error) {
-  if (error instanceof CsvFileNotFoundError) {
-    console.error(`File not found: ${error.filePath}`);
-  } else if (error instanceof CsvDuplicateHeaderError) {
-    console.error(`Duplicate headers: ${error.duplicateHeaders.join(', ')}`);
-  } else if (error instanceof CsvValidationError) {
-    console.error(`Validation error at row ${error.row}`);
-    console.error(`Expected ${error.expectedColumns}, got ${error.actualColumns}`);
-  } else if (error instanceof CsvEncodingError) {
-    console.error(`Encoding error: ${error.encoding}`);
-  } else if (error instanceof CsvParseError) {
-    console.error(`Parse error at row ${error.row}, column ${error.column}`);
-  }
+	if (error instanceof CsvFileNotFoundError) {
+		console.error(`File not found: ${error.filePath}`);
+	} else if (error instanceof CsvDuplicateHeaderError) {
+		console.error(`Duplicate headers: ${error.duplicateHeaders.join(", ")}`);
+	} else if (error instanceof CsvValidationError) {
+		console.error(`Validation error at row ${error.row}`);
+		console.error(`Expected ${error.expectedColumns}, got ${error.actualColumns}`);
+	} else if (error instanceof CsvEncodingError) {
+		console.error(`Encoding error: ${error.encoding}`);
+	} else if (error instanceof CsvParseError) {
+		console.error(`Parse error at row ${error.row}, column ${error.column}`);
+	}
 }
 ```
 
@@ -1381,6 +1400,7 @@ id,name,item
 ```
 
 Groups:
+
 - Group 1: Rows with `id=1` and the two continuation rows
 - Group 2: Row with `id=2`
 
@@ -1394,14 +1414,15 @@ Alice,30
 ```
 
 Creates:
+
 ```json
 {
-  "user": {
-    "profile": {
-      "name": "Alice",
-      "age": "30"
-    }
-  }
+	"user": {
+		"profile": {
+			"name": "Alice",
+			"age": "30"
+		}
+	}
 }
 ```
 
@@ -1416,13 +1437,14 @@ id,contact.type,contact.value
 ```
 
 Creates:
+
 ```json
 {
-  "id": "1",
-  "contact": [
-    { "type": "email", "value": "alice@example.com" },
-    { "type": "phone", "value": "555-1234" }
-  ]
+	"id": "1",
+	"contact": [
+		{ "type": "email", "value": "alice@example.com" },
+		{ "type": "phone", "value": "555-1234" }
+	]
 }
 ```
 
@@ -1437,10 +1459,11 @@ id,name,optional
 ```
 
 Creates:
+
 ```json
 [
-  { "id": "1", "name": "Alice" },
-  { "id": "2", "name": "Bob", "optional": "Value" }
+	{ "id": "1", "name": "Alice" },
+	{ "id": "2", "name": "Bob", "optional": "Value" }
 ]
 ```
 
@@ -1448,37 +1471,37 @@ Creates:
 
 ### When to Use Each Method
 
-| Method | Best For | File Size | Blocking |
-|--------|----------|-----------|----------|
-| `parseFileSync()` | Scripts, small files | <10MB | Yes |
-| `parseFile()` | Web servers, medium files | 10MB-100MB | No |
-| `parseString()` | API responses, testing | Any (in-memory) | Yes |
-| `parseStream()` | Readable stream inputs with buffered output | Any (buffered in memory) | No |
-| `CsvStreamParser` | Large/very large files, ETL pipelines | Any size | No |
+| Method            | Best For                                    | File Size                | Blocking |
+| ----------------- | ------------------------------------------- | ------------------------ | -------- |
+| `parseFileSync()` | Scripts, small files                        | <10MB                    | Yes      |
+| `parseFile()`     | Web servers, medium files                   | 10MB-100MB               | No       |
+| `parseString()`   | API responses, testing                      | Any (in-memory)          | Yes      |
+| `parseStream()`   | Readable stream inputs with buffered output | Any (buffered in memory) | No       |
+| `CsvStreamParser` | Large/very large files, ETL pipelines       | Any size                 | No       |
 
 ### Traditional CSV Parsing
 
 ```javascript
 // ❌ Manual parsing - tedious and error-prone
-const fs = require('fs');
-const data = fs.readFileSync('data.csv', 'utf-8');
-const lines = data.split('\n');
-const headers = lines[0].split(',');
+const fs = require("fs");
+const data = fs.readFileSync("data.csv", "utf-8");
+const lines = data.split("\n");
+const headers = lines[0].split(",");
 const result = [];
 
 for (let i = 1; i < lines.length; i++) {
-  const values = lines[i].split(',');
-  const obj = {};
+	const values = lines[i].split(",");
+	const obj = {};
 
-  for (let j = 0; j < headers.length; j++) {
-    const keys = headers[j].split('.');
-    let current = obj;
+	for (let j = 0; j < headers.length; j++) {
+		const keys = headers[j].split(".");
+		let current = obj;
 
-    // Manually handle nesting...
-    // ... complex nested object logic
-  }
+		// Manually handle nesting...
+		// ... complex nested object logic
+	}
 
-  result.push(obj);
+	result.push(obj);
 }
 ```
 
@@ -1486,7 +1509,7 @@ for (let i = 1; i < lines.length; i++) {
 
 ```typescript
 // ✅ Simple, type-safe, and powerful
-const result = CsvParser.parseFileSync('data.csv');
+const result = CsvParser.parseFileSync("data.csv");
 
 // ✅ Automatic nested object creation
 // ✅ Automatic array detection
@@ -1527,31 +1550,31 @@ Full TypeScript support with comprehensive type definitions:
 
 ```typescript
 import {
-  CsvParser,
-  CsvStreamParser,
-  JsonToCsv,
-  CsvParserOptions,
-  CsvStreamParserOptions,
-  CsvParseError,
-  CsvValidationError,
-  NestedObject,
-  ProgressInfo,
-  ProgressCallback,
-  DuplicateHeaderOptions
-} from '@cerios/csv-nested-json';
+	CsvParser,
+	CsvStreamParser,
+	JsonToCsv,
+	CsvParserOptions,
+	CsvStreamParserOptions,
+	CsvParseError,
+	CsvValidationError,
+	NestedObject,
+	ProgressInfo,
+	ProgressCallback,
+	DuplicateHeaderOptions,
+} from "@cerios/csv-nested-json";
 
 // Generic type support
 interface Person {
-  id: number;
-  name: string;
-  address: {
-    city: string;
-    zip: string;
-  };
+	id: number;
+	name: string;
+	address: {
+		city: string;
+		zip: string;
+	};
 }
 
-const result = CsvParser.parseFileSync<Person>('people.csv', {
-  autoParseNumbers: true
+const result = CsvParser.parseFileSync<Person>("people.csv", {
+	autoParseNumbers: true,
 });
 
 // result is typed as Person[]
@@ -1562,11 +1585,11 @@ console.log(result[0].address.city);
 
 ```typescript
 // Options
-type ValidationMode = 'ignore' | 'warn' | 'error';
-type EmptyArrayBehavior = 'empty-array' | 'omit';
-type NullRepresentation = 'null' | 'undefined' | 'empty-string' | 'omit';
-type ArrayMode = 'rows' | 'json';
-type DuplicateHeaderStrategy = 'error' | 'rename' | 'combine' | 'first' | 'last';
+type ValidationMode = "ignore" | "warn" | "error";
+type EmptyArrayBehavior = "empty-array" | "omit";
+type NullRepresentation = "null" | "undefined" | "empty-string" | "omit";
+type ArrayMode = "rows" | "json";
+type DuplicateHeaderStrategy = "error" | "rename" | "combine" | "first" | "last";
 
 // Function types
 type ValueTransformer = (value: unknown, header: string) => unknown;
@@ -1576,10 +1599,10 @@ type ProgressCallback = (info: ProgressInfo) => void | Promise<void>;
 
 // Progress tracking
 interface ProgressInfo {
-  bytesProcessed: number;    // Total bytes read
-  recordsEmitted: number;    // Records emitted so far
-  headersProcessed: boolean; // Whether headers have been parsed
-  elapsedMs: number;         // Milliseconds since start
+	bytesProcessed: number; // Total bytes read
+	recordsEmitted: number; // Records emitted so far
+	headersProcessed: boolean; // Whether headers have been parsed
+	elapsedMs: number; // Milliseconds since start
 }
 
 // Data types
@@ -1588,18 +1611,23 @@ type NestedObject = { [key: string]: NestedValue };
 type NestedValue = string | number | boolean | Date | null | NestedObject | NestedValue[];
 
 // Options interfaces
-interface CsvParserOptions { /* ... */ }
-interface CsvStreamParserOptions extends CsvParserOptions { /* ... */ }
+interface CsvParserOptions {
+	/* ... */
+}
+interface CsvStreamParserOptions extends CsvParserOptions {
+	/* ... */
+}
 ```
 
 ## 🎯 Best Practices
 
 1. **Choose the Right Method:**
-  - Use `parseFileSync()` for small files in scripts
-  - Use `parseFile()` for web servers and async workflows
-  - Use `parseString()` for API responses and testing
-  - Use `parseStream()` when your source is a readable stream and buffering all content is acceptable
-  - Use `CsvStreamParser` for large/very large files or incremental processing; it groups continuation rows to match `CsvParser` continuation semantics
+
+- Use `parseFileSync()` for small files in scripts
+- Use `parseFile()` for web servers and async workflows
+- Use `parseString()` for API responses and testing
+- Use `parseStream()` when your source is a readable stream and buffering all content is acceptable
+- Use `CsvStreamParser` for large/very large files or incremental processing; it groups continuation rows to match `CsvParser` continuation semantics
 
 2. **Use Appropriate Validation Mode:**
    - Use `'ignore'` when you trust the data source
@@ -1607,59 +1635,64 @@ interface CsvStreamParserOptions extends CsvParserOptions { /* ... */ }
    - Use `'error'` for strict validation in production
 
 3. **Enable Auto-Parsing When Appropriate:**
+
    ```typescript
-   const result = CsvParser.parseFileSync('./data.csv', {
-     autoParseNumbers: true,
-     autoParseBooleans: true,
-     autoParseDates: true
+   const result = CsvParser.parseFileSync("./data.csv", {
+   	autoParseNumbers: true,
+   	autoParseBooleans: true,
+   	autoParseDates: true,
    });
    ```
 
 4. **Handle Errors Gracefully:**
+
    ```typescript
-   import { CsvParseError, CsvValidationError } from '@cerios/csv-nested-json';
+   import { CsvParseError, CsvValidationError } from "@cerios/csv-nested-json";
 
    try {
-     const result = CsvParser.parseFileSync('./data.csv', {
-       validationMode: 'error'
-     });
+   	const result = CsvParser.parseFileSync("./data.csv", {
+   		validationMode: "error",
+   	});
    } catch (error) {
-     if (error instanceof CsvValidationError) {
-       console.error(`Row ${error.row}: expected ${error.expectedColumns} columns`);
-     } else {
-       throw error;
-     }
+   	if (error instanceof CsvValidationError) {
+   		console.error(`Row ${error.row}: expected ${error.expectedColumns} columns`);
+   	} else {
+   		throw error;
+   	}
    }
    ```
 
 5. **Use Streaming for Large Files:**
+
    ```typescript
    // ✅ Good for very large files
    const parser = new CsvStreamParser({ autoParseNumbers: true });
-   for await (const record of createReadStream('./huge.csv').pipe(parser)) {
-     await processRecord(record);
+   for await (const record of createReadStream("./huge.csv").pipe(parser)) {
+   	await processRecord(record);
    }
 
    // ❌ May cause memory issues with large files
-   const result = CsvParser.parseFileSync('./huge.csv');
+   const result = CsvParser.parseFileSync("./huge.csv");
    ```
 
 6. **Use Row Filtering for Memory Efficiency:**
+
    ```typescript
    // ✅ Filter during parsing - uses less memory
-   const result = CsvParser.parseFileSync('./data.csv', {
-     rowFilter: (record) => record.status === 'active'
+   const result = CsvParser.parseFileSync("./data.csv", {
+   	rowFilter: record => record.status === "active",
    });
 
    // ❌ Filter after parsing - loads everything into memory first
-   const all = CsvParser.parseFileSync('./data.csv');
-   const filtered = all.filter(r => r.status === 'active');
+   const all = CsvParser.parseFileSync("./data.csv");
+   const filtered = all.filter(r => r.status === "active");
    ```
 
 7. **Specify Encoding for Non-UTF8 Files:**
+
    ```typescript
-   const result = await CsvParser.parseFile('./data.csv', {
-     encoding: 'latin1'
+   const result = await CsvParser.parseFile("./data.csv", {
+   	encoding: "latin1",
    });
    ```
 

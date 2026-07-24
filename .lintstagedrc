@@ -1,3 +1,7 @@
 {
-	"*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx,json,jsonc}": ["biome check --write --no-errors-on-unmatched"]
+	"**/*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx}": [
+		"oxlint -c .oxlintrc.json --fix --type-aware",
+		"oxfmt --config .oxfmtrc.json"
+	],
+	"**/*.{json,jsonc}": ["oxfmt --config .oxfmtrc.json"]
 }

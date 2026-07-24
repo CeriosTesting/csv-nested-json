@@ -1,3 +1,5 @@
+import { describe, expect, it } from "vitest";
+
 import { NestedJsonConverter } from "../src/nested-json-converter";
 
 describe("NestedJsonConverter", () => {

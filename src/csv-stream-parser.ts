@@ -1,4 +1,5 @@
 import { Transform, type TransformCallback, type TransformOptions } from "node:stream";
+
 import { CsvDuplicateHeaderError, CsvParseError } from "./errors";
 import {
 	type InternalCsvCellValue,
@@ -1021,7 +1022,6 @@ export class CsvStreamParser extends Transform {
 				if (!headerSet.has(col) && validationMode !== "ignore") {
 					const message = `Column '${col}' specified in includeColumns does not exist in the CSV headers.`;
 					if (validationMode === "warn" || validationMode === undefined) {
-						// biome-ignore lint/suspicious/noConsole: User explicitly requested warning mode
 						console.warn(`Warning: ${message}`);
 					}
 				}

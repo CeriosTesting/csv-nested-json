@@ -1,4 +1,7 @@
 import { Readable } from "node:stream";
+
+import { describe, expect, it } from "vitest";
+
 import type { HeaderTransformer, RowFilter } from "../src";
 import { CsvParser, CsvStreamParser } from "../src";
 

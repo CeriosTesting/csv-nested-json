@@ -1,4 +1,7 @@
 import { Readable } from "node:stream";
+
+import { describe, expect, it } from "vitest";
+
 import { CsvStreamParser } from "../src/csv-stream-parser";
 import type { NestedObject, ProgressInfo } from "../src/types";
 
@@ -733,7 +736,7 @@ g1,2,c`;
 	});
 
 	describe("Event-based usage", () => {
-		it("should emit data events for each record", done => {
+		it("should emit data events for each record", () => {
 			const csvContent = `id,name
 1,Alice
 2,Bob`;
@@ -742,36 +745,40 @@ g1,2,c`;
 
 			const records: NestedObject[] = [];
 
-			stream
-				.pipe(parser)
-				.on("data", record => {
-					records.push(record);
-				})
-				.on("end", () => {
-					expect(records).toEqual([
-						{ id: "1", name: "Alice" },
-						{ id: "2", name: "Bob" },
-					]);
-					done();
-				})
-				.on("error", done);
+			return new Promise<void>((resolve, reject) => {
+				stream
+					.pipe(parser)
+					.on("data", record => {
+						records.push(record);
+					})
+					.on("end", () => {
+						expect(records).toEqual([
+							{ id: "1", name: "Alice" },
+							{ id: "2", name: "Bob" },
+						]);
+						resolve();
+					})
+					.on("error", reject);
+			});
 		});
 
-		it("should emit end event when stream completes", done => {
+		it("should emit end event when stream completes", () => {
 			const csvContent = `id,name
 1,Alice`;
 			const stream = Readable.from([csvContent]);
 			const parser = new CsvStreamParser();
 
-			stream
-				.pipe(parser)
-				.on("data", () => {
-					// Consume data to allow end event
-				})
-				.on("end", () => {
-					done();
-				})
-				.on("error", done);
+			return new Promise<void>((resolve, reject) => {
+				stream
+					.pipe(parser)
+					.on("data", () => {
+						// Consume data to allow end event
+					})
+					.on("end", () => {
+						resolve();
+					})
+					.on("error", reject);
+			});
 		});
 	});
 

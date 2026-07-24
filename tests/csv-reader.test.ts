@@ -1,3 +1,5 @@
+import { describe, expect, it, vi } from "vitest";
+
 import { CsvReader } from "../src/csv-reader";
 
 describe("CsvReader", () => {
@@ -169,7 +171,7 @@ describe("CsvReader", () => {
 	describe("parse - validation modes", () => {
 		it("should warn about extra values (default)", () => {
 			const content = "id,name,email\n1,Alice,alice@example.com,extra1,extra2\n2,Bob,bob@example.com,extra3";
-			const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
+			const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			const result = CsvReader.parse(content);
 
@@ -194,7 +196,7 @@ describe("CsvReader", () => {
 
 		it("should warn about extra values when validationMode is 'warn'", () => {
 			const content = "id,name\n1,Alice,extra1\n2,Bob,extra2,extra3";
-			const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
+			const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			const result = CsvReader.parse(content, { validationMode: "warn" });
 

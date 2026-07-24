@@ -1,4 +1,7 @@
 import { Readable } from "node:stream";
+
+import { describe, expect, it, vi } from "vitest";
+
 import { CsvParseError, CsvReader, CsvStreamParser, NestedJsonConverter } from "../src";
 import type { NestedObject } from "../src/types";
 
@@ -20,7 +23,7 @@ describe("Column Selection/Exclusion", () => {
 		});
 
 		it("should warn for missing columns in includeColumns", () => {
-			const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			const csv = "id,name,email\n1,John,john@test.com";
 			CsvReader.parse(csv, {
 				includeColumns: ["id", "nonexistent", "name"],
@@ -33,7 +36,7 @@ describe("Column Selection/Exclusion", () => {
 		});
 
 		it("should handle all columns missing from includeColumns", () => {
-			const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			const csv = "id,name,email\n1,John,john@test.com";
 			const result = CsvReader.parse(csv, { includeColumns: ["missing1", "missing2"] });
 
@@ -67,7 +70,7 @@ describe("Column Selection/Exclusion", () => {
 		});
 
 		it("should handle non-existent columns in excludeColumns silently", () => {
-			const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			const csv = "id,name,email\n1,John,john@test.com";
 			const result = CsvReader.parse(csv, { excludeColumns: ["nonexistent"] });
 
@@ -230,7 +233,7 @@ describe("Column Selection/Exclusion", () => {
 		});
 
 		it("should warn for missing includeColumns in streaming parser", async () => {
-			const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			const csv = "id,name,email\n1,John,john@test.com\n";
 			const stream = Readable.from([csv]);
 			const parser = new CsvStreamParser({

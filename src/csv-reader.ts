@@ -132,7 +132,6 @@ export class CsvReader {
 					throw new CsvValidationError(message, lineNumber, headers.length, values.length);
 				}
 				if (validationMode === "warn") {
-					// biome-ignore lint/suspicious/noConsole: User explicitly requested warning mode
 					console.warn(`Warning: ${message}`);
 				}
 			}
@@ -473,7 +472,6 @@ export class CsvReader {
 				if (!headerSet.has(col) && validationMode !== "ignore") {
 					const message = `Column '${col}' specified in includeColumns does not exist in the CSV headers.`;
 					if (validationMode === "warn") {
-						// biome-ignore lint/suspicious/noConsole: User explicitly requested warning mode
 						console.warn(`Warning: ${message}`);
 					}
 					// Note: we don't throw for 'error' mode here, just warn - it's not a fatal issue

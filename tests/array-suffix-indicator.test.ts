@@ -1,3 +1,5 @@
+import { describe, expect, it } from "vitest";
+
 import { CsvParser } from "../src/csv-parser";
 
 describe("Array Suffix Indicator", () => {

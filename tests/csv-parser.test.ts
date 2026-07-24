@@ -1,5 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
 import { CsvParser } from "../src/csv-parser";
 
 const TEST_DATA_DIR = path.join(__dirname, "test-data");
@@ -576,7 +579,7 @@ Line 3"`;
 2,Bob,bob@example.com,extra3`;
 				fs.writeFileSync(csvPath, csvContent);
 
-				const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
+				const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 				const result = CsvParser.parseFileSync(csvPath);
 
@@ -612,7 +615,7 @@ Line 3"`;
 2,Bob,extra2,extra3`;
 				fs.writeFileSync(csvPath, csvContent);
 
-				const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
+				const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 				const result = CsvParser.parseFileSync(csvPath, { validationMode: "warn" });
 
