@@ -284,7 +284,7 @@ id,name,age
 			}
 
 			expect(typeof records[0].big).toBe("number");
-			expect(String(records[0].big)).toBe("9007199254740992");
+			expect(String(records[0].big as number)).toBe("9007199254740992");
 		});
 
 		it("should auto-parse booleans when enabled", async () => {

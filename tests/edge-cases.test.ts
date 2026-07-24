@@ -303,7 +303,7 @@ describe("Edge Cases", () => {
 			const result = CsvParser.parseString(csv, { autoParseNumbers: true });
 
 			expect(typeof result[0].big).toBe("number");
-			expect(String(result[0].big)).toBe("9007199254740992");
+			expect(String(result[0].big as number)).toBe("9007199254740992");
 		});
 
 		it("should still parse safe integers as numbers with unsafe-integer preservation enabled", () => {
