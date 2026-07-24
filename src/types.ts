@@ -326,6 +326,28 @@ export interface CsvParserOptions {
 	trimValues?: boolean;
 
 	/**
+	 * Recognize a quote character as field-opening even when it is preceded by leading spaces
+	 * (e.g. `, "quoted, value"`). The leading spaces before the opening quote are discarded.
+	 *
+	 * @remarks
+	 * By default (per RFC 4180) a space before a quote is a significant character, so the quote is
+	 * treated as a literal and a delimiter inside the intended quoted field would split it. Enable
+	 * this for CSV producers that emit a space after the delimiter. This is orthogonal to
+	 * {@link CsvParserOptions.trimValues}, which trims the body of unquoted fields; `trimLeadingSpace`
+	 * only affects whether a following quote opens the field. Whitespace inside a quoted field is
+	 * always preserved.
+	 *
+	 * @default false
+	 *
+	 * @example
+	 * ```typescript
+	 * // '1, "x,y"' -> { note: 'x,y' } instead of splitting on the inner comma
+	 * CsvParser.parseString(csv, { trimLeadingSpace: true });
+	 * ```
+	 */
+	trimLeadingSpace?: boolean;
+
+	/**
 	 * Automatically strip BOM (Byte Order Mark) from the beginning of content.
 	 * Handles UTF-8 BOM (\uFEFF) and UTF-16 BOMs.
 	 * @default true

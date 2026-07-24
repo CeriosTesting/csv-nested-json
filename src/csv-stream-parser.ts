@@ -10,7 +10,7 @@ import {
 	toPublicCsvCellValue,
 } from "./internal-empty-cell";
 import { NestedJsonConverter } from "./nested-json-converter";
-import { assertDelimiterAndQuote } from "./option-validation";
+import { assertDelimiterAndQuote, isLeadingSpaceOnly, warnInertOptions } from "./option-validation";
 import {
 	needsValueTransformation,
 	resolveNullSet,
@@ -132,6 +132,7 @@ export class CsvStreamParser extends Transform {
 	private converterOptions: CsvStreamParserOptions;
 	private delimiter: string;
 	private quote: string;
+	private trimLeadingSpace: boolean;
 	private skipRows: number;
 	private stripBom: boolean;
 	private bomStripped = false;
@@ -205,6 +206,8 @@ export class CsvStreamParser extends Transform {
 		this.delimiter = options.delimiter || ",";
 		this.quote = options.quote || '"';
 		assertDelimiterAndQuote(this.delimiter, this.quote);
+		warnInertOptions(options);
+		this.trimLeadingSpace = options.trimLeadingSpace === true;
 		this.skipRows = options.skipRows || 0;
 		this.stripBom = options.stripBom !== false;
 		// Decode incoming Buffer chunks with a stateful decoder so that multibyte
@@ -416,6 +419,15 @@ export class CsvStreamParser extends Transform {
 	 * Process the buffer and extract complete lines.
 	 */
 	private processBuffer(): void {
+		// Fast path: with no quote character anywhere in the pending buffer, no field can span a line
+		// boundary, so line breaks can be located with indexOf instead of a per-character scan.
+		// Comment/blank/validation handling all live in processLine, so delegating each complete line
+		// keeps behavior identical to the slow path (parity with the buffered tokenizer's fast path).
+		if (this.buffer.indexOf(this.quote) === -1) {
+			this.processBufferNoQuote();
+			return;
+		}
+
 		const commentPrefix = this.options.commentPrefix;
 		const hasComments = commentPrefix !== undefined && commentPrefix !== "";
 		let insideQuotes = false;
@@ -478,12 +490,47 @@ export class CsvStreamParser extends Transform {
 				// A new line starts a new record and a new first field.
 				atFieldStart = true;
 				fieldWasQuoted = false;
-			} else {
+			} else if (!(this.trimLeadingSpace && atFieldStart && char === " ")) {
+				// Any other character ends the field-start region. With trimLeadingSpace, a leading
+				// space is skipped so a following quote can still open the field (kept in lockstep
+				// with the tokenizer/parseLine open condition).
 				atFieldStart = false;
 			}
 		}
 
 		// Keep any incomplete line in the buffer
+		this.buffer = this.buffer.slice(lineStart);
+	}
+
+	/**
+	 * Line-splitting fast path for a buffer known to contain no quote characters. Locates line
+	 * terminators via indexOf and delegates each complete line to {@link processLine}; the final
+	 * partial line (if any) stays buffered for the next chunk.
+	 */
+	private processBufferNoQuote(): void {
+		let lineStart = 0;
+
+		for (;;) {
+			const nl = this.buffer.indexOf("\n", lineStart);
+			const cr = this.buffer.indexOf("\r", lineStart);
+
+			let brk: number;
+			if (nl === -1) brk = cr;
+			else if (cr === -1) brk = nl;
+			else brk = Math.min(nl, cr);
+
+			if (brk === -1) break; // No complete line left; keep the remainder buffered.
+
+			this.processLine(this.buffer.slice(lineStart, brk));
+
+			// Consume a CRLF pair as a single terminator.
+			if (this.buffer[brk] === "\r" && this.buffer[brk + 1] === "\n") {
+				lineStart = brk + 2;
+			} else {
+				lineStart = brk + 1;
+			}
+		}
+
 		this.buffer = this.buffer.slice(lineStart);
 	}
 
@@ -785,8 +832,14 @@ export class CsvStreamParser extends Transform {
 						// Closing quote
 						insideQuotes = false;
 					}
-				} else if (currentValue === "" && !fieldWasQuoted) {
-					// Opening quote (only special at the start of a field, per RFC 4180)
+				} else if (
+					!fieldWasQuoted &&
+					(currentValue === "" || (this.trimLeadingSpace && isLeadingSpaceOnly(currentValue)))
+				) {
+					// Opening quote (only special at the start of a field, per RFC 4180). With
+					// trimLeadingSpace, leading spaces before the quote are discarded so the quote
+					// still opens the field.
+					currentValue = "";
 					insideQuotes = true;
 					fieldWasQuoted = true;
 				} else {

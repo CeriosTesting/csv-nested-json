@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { CsvFileReader } from "./csv-file-reader";
 import { CsvReader } from "./csv-reader";
 import { NestedJsonConverter } from "./nested-json-converter";
+import { warnInertOptions } from "./option-validation";
 import type { CsvParserOptions, NestedObject } from "./types";
 
 /**
@@ -155,6 +156,7 @@ export abstract class CsvParser {
 	 * ```
 	 */
 	static parseString<T = NestedObject>(csvContent: string, options: CsvParserOptions = {}): T[] {
+		warnInertOptions(options);
 		const records = CsvReader.parseWithQuotedEmptyProvenance(csvContent, options);
 		return NestedJsonConverter.convert(records, options) as T[];
 	}

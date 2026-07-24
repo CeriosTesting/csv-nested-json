@@ -6,7 +6,7 @@ import {
 	QUOTED_EMPTY_CELL,
 	toPublicCsvCellValue,
 } from "./internal-empty-cell";
-import { assertDelimiterAndQuote } from "./option-validation";
+import { assertDelimiterAndQuote, isLeadingSpaceOnly } from "./option-validation";
 import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, ValidationMode } from "./types";
 
 /**
@@ -78,10 +78,19 @@ export class CsvReader {
 		const skipRows = options.skipRows || 0;
 		const commentPrefix = options.commentPrefix;
 		const trimValues = options.trimValues === true;
+		const trimLeadingSpace = options.trimLeadingSpace === true;
 
 		// Single-pass tokenize: split into rows of cells in one scan, instead of building an
 		// intermediate array of line strings (splitLines) and then re-scanning each line (parseLine).
-		const rows = this.tokenize(processedContent, delimiter, quote, preserveQuotedEmpty, commentPrefix, trimValues);
+		const rows = this.tokenize(
+			processedContent,
+			delimiter,
+			quote,
+			preserveQuotedEmpty,
+			commentPrefix,
+			trimValues,
+			trimLeadingSpace
+		);
 
 		if (rows.length === 0) return [];
 
@@ -181,7 +190,8 @@ export class CsvReader {
 		quote: string,
 		preserveQuotedEmpty: boolean,
 		commentPrefix?: string,
-		trimValues = false
+		trimValues = false,
+		trimLeadingSpace = false
 	): { cells: InternalCsvCellValue[]; blank: boolean }[] {
 		const hasComments = commentPrefix !== undefined && commentPrefix !== "";
 
@@ -233,8 +243,11 @@ export class CsvReader {
 						// Closing quote
 						insideQuotes = false;
 					}
-				} else if (currentValue === "" && !fieldWasQuoted) {
-					// Opening quote (only special at the start of a field, per RFC 4180)
+				} else if (!fieldWasQuoted && (currentValue === "" || (trimLeadingSpace && isLeadingSpaceOnly(currentValue)))) {
+					// Opening quote (only special at the start of a field, per RFC 4180). With
+					// trimLeadingSpace, leading spaces before the quote are discarded so the quote
+					// still opens the field.
+					currentValue = "";
 					insideQuotes = true;
 					fieldWasQuoted = true;
 				} else {

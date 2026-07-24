@@ -952,8 +952,12 @@ interface CsvParserOptions {
 	// Row handling
 	skipRows?: number; // Default: 0
 	stripBom?: boolean; // Default: true
+	commentPrefix?: string; // Skip lines starting with this prefix
+	trimValues?: boolean; // Trim unquoted field values (Default: false)
+	trimLeadingSpace?: boolean; // Recognize a quote after leading spaces (Default: false)
 	rowFilter?: (record, rowIndex) => boolean; // Filter rows during parsing
 	limit?: number; // Max records to parse
+	offset?: number; // Skip N output records before collecting (applied before limit)
 
 	// Column selection
 	includeColumns?: string[]; // Include only these columns (matched against original CSV headers)
@@ -1067,6 +1071,19 @@ quoted fields is always preserved. Default: `false`
 CsvParser.parseString(csv, { trimValues: true });
 ```
 
+#### `trimLeadingSpace`
+
+Recognize a quote character as field-opening even when it is preceded by leading spaces (the spaces
+are discarded). Default: `false`. By default (per RFC 4180) a space before a quote is significant, so
+the quote is treated as a literal and a delimiter inside the intended quoted field would split it.
+Enable this for producers that emit a space after the delimiter. Orthogonal to `trimValues`;
+whitespace **inside** a quoted field is always preserved. Both parsers behave identically.
+
+```typescript
+// '1, "x,y"' -> { note: 'x,y' } instead of splitting on the inner comma
+CsvParser.parseString(csv, { trimLeadingSpace: true });
+```
+
 #### `autoParseNumbers`
 
 Automatically convert numeric strings to numbers. Strings with leading zeros (like `"007"`) are preserved.
@@ -1132,6 +1149,18 @@ Maximum number of records to parse. Parsing stops after this limit is reached, w
 
 ```typescript
 limit: 100; // Stop after 100 records
+```
+
+#### `offset`
+
+Number of output records to skip before collecting results. Applied **before** `limit`, so `offset`
+and `limit` together select a window of records (useful for pagination). Like `limit`, it counts
+grouped output records (continuation-row groups map to a single record and are never split) and is
+applied after `rowFilter`. Both parsers apply it identically.
+
+```typescript
+// Skip the first 100 records, then take the next 50
+CsvParser.parseString(csv, { offset: 100, limit: 50 });
 ```
 
 #### `includeColumns`
@@ -1385,12 +1414,25 @@ not used because each array is written to a single cell.
 **`JsonToCsvOptions`:**
 
 - `delimiter` / `quote` — single characters (default `,` and `"`).
+- `encoding` — file encoding for `writeFile`/`writeFileSync` (default `'utf-8'`).
 - `lineEnding` — `'\n'` (default) or `'\r\n'`.
 - `includeHeader` — whether to emit a header row (default `true`).
 - `arrayMode` — `'rows'` (default) or `'json'`.
 - `arraySuffixIndicator` — suffix for array headers in `'rows'` mode (default `'[]'`).
 - `nullValue` — string emitted for an explicit `null` so it can be distinguished from an empty cell
   on re-parse (default `''`). A missing/`undefined` value always becomes an empty string.
+- `columns` — explicit header columns, in the exact order they should appear. When provided, headers
+  are used as-is instead of being collected from the data, so columns can be reordered, subset, or
+  pinned. Listed keys missing from a record become empty cells; unlisted keys are dropped. May use
+  dot-notation and the array suffix (e.g. `['id', 'name', 'tags[]']`).
+- `sortHeaders` — when headers are auto-collected, sort them (primary keys first, then nested keys
+  alphabetically). Set `false` to keep first-seen insertion order. Ignored when `columns` is set
+  (default `true`).
+- `quoteAll` — wrap every field in the quote character regardless of content, for consumers that
+  require uniformly quoted output (default `false`).
+- `writeBom` — prepend a UTF-8 byte order mark so spreadsheet apps (notably Excel) detect UTF-8
+  (default `false`).
+- `trailingNewline` — append a final line ending after the last row (default `false`).
 
 **Known limitation:** an empty nested object (`{ a: {} }`) produces no column and is dropped, because
 there is no leaf value to place under a header.
@@ -1629,7 +1671,7 @@ import {
 	NestedObject,
 	ProgressInfo,
 	ProgressCallback,
-	DuplicateHeaderOptions,
+	DuplicateHeaderStrategy,
 } from "@cerios/csv-nested-json";
 
 // Generic type support
