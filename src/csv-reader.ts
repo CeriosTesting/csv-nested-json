@@ -75,16 +75,19 @@ export class CsvReader {
 		const quote = options.quote || '"';
 		const skipRows = options.skipRows || 0;
 
-		const lines = this.splitLines(processedContent, quote);
+		// Single-pass tokenize: split into rows of cells in one scan, instead of building an
+		// intermediate array of line strings (splitLines) and then re-scanning each line (parseLine).
+		const rows = this.tokenize(processedContent, delimiter, quote, preserveQuotedEmpty);
 
-		if (lines.length === 0) return [];
+		if (rows.length === 0) return [];
 
 		// Skip initial rows if specified
 		const dataStartIndex = skipRows;
-		if (dataStartIndex >= lines.length) return [];
+		if (dataStartIndex >= rows.length) return [];
 
-		// Parse header (first line after skipped rows)
-		const originalHeaders = this.parseLine(lines[dataStartIndex], delimiter, quote);
+		// Header cells (first row after skipped rows). Headers are always plain strings, so a
+		// quoted-empty header cell collapses to "" rather than the internal sentinel.
+		const originalHeaders = rows[dataStartIndex].cells.map(cell => toPublicCsvCellValue(cell));
 		if (originalHeaders.length === 0) return [];
 
 		// Apply column filtering FIRST (based on original header names)
@@ -117,11 +120,10 @@ export class CsvReader {
 		// Parse data rows
 		const records: InternalCsvRecord[] = [];
 		let dataRowIndex = 0;
-		for (let i = dataStartIndex + 1; i < lines.length; i++) {
-			const line = lines[i].trim();
-			if (line === "") continue; // Skip empty lines
+		for (let i = dataStartIndex + 1; i < rows.length; i++) {
+			if (rows[i].blank) continue; // Skip empty lines (raw line was whitespace-only)
 
-			const values = this.parseLine(lines[i], delimiter, quote, preserveQuotedEmpty);
+			const values = rows[i].cells;
 
 			// Validate column count
 			if (values.length > headers.length && validationMode !== "ignore") {
@@ -150,6 +152,75 @@ export class CsvReader {
 		}
 
 		return records;
+	}
+
+	/**
+	 * Tokenize CSV content into rows of cells in a single pass.
+	 *
+	 * Each returned entry carries the parsed `cells` and a `blank` flag indicating the raw line
+	 * was whitespace-only (so it should be skipped as an empty line, matching the previous
+	 * `splitLines`/`parseLine` behavior). Rows are emitted 1:1 with source lines (blank lines
+	 * included) so that `skipRows` and error line numbers stay aligned. A trailing empty line
+	 * produced by a final line terminator is dropped.
+	 */
+	private static tokenize(
+		content: string,
+		delimiter: string,
+		quote: string,
+		preserveQuotedEmpty: boolean
+	): { cells: InternalCsvCellValue[]; blank: boolean }[] {
+		// Fast path: without any quote character, no field can contain a delimiter or span a line
+		// boundary, so native splitting is exact and far faster than manual accumulation.
+		if (content.indexOf(quote) === -1) {
+			const lines = content.split(/\r\n|\n|\r/);
+			if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+			return lines.map(line => ({ cells: line.split(delimiter), blank: line.trim() === "" }));
+		}
+
+		const rows: { cells: InternalCsvCellValue[]; blank: boolean }[] = [];
+		let cells: InternalCsvCellValue[] = [];
+		let currentValue = "";
+		let insideQuotes = false;
+		let fieldWasQuoted = false;
+		let lineStart = 0;
+
+		for (let i = 0; i < content.length; i++) {
+			const char = content[i];
+
+			if (char === quote) {
+				if (insideQuotes && content[i + 1] === quote) {
+					// Escaped quote
+					currentValue += quote;
+					i++;
+				} else {
+					insideQuotes = !insideQuotes;
+					fieldWasQuoted = true;
+				}
+			} else if (char === delimiter && !insideQuotes) {
+				cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
+				currentValue = "";
+				fieldWasQuoted = false;
+			} else if ((char === "\n" || char === "\r") && !insideQuotes) {
+				const lineEnd = i;
+				if (char === "\r" && content[i + 1] === "\n") i++; // Consume the \n of a CRLF pair
+				cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
+				rows.push({ cells, blank: content.slice(lineStart, lineEnd).trim() === "" });
+				cells = [];
+				currentValue = "";
+				fieldWasQuoted = false;
+				lineStart = i + 1;
+			} else {
+				currentValue += char;
+			}
+		}
+
+		// Emit the final line only when the content did not end on a line terminator.
+		if (lineStart < content.length || cells.length > 0 || currentValue !== "") {
+			cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
+			rows.push({ cells, blank: content.slice(lineStart).trim() === "" });
+		}
+
+		return rows;
 	}
 
 	private static createRecord(
@@ -250,6 +321,16 @@ export class CsvReader {
 	 * ```
 	 */
 	static splitLines(content: string, quote = '"'): string[] {
+		// Fast path: without a quote character no field can span a line boundary, so a native
+		// split on line terminators is exact. The manual scan below drops the single empty
+		// segment produced by a trailing terminator, so replicate that by popping it here.
+		if (content.indexOf(quote) === -1) {
+			if (content === "") return [];
+			const parts = content.split(/\r\n|\n|\r/);
+			if (parts[parts.length - 1] === "") parts.pop();
+			return parts;
+		}
+
 		const lines: string[] = [];
 		let currentLine = "";
 		let insideQuotes = false;
@@ -315,6 +396,12 @@ export class CsvReader {
 		preserveQuotedEmpty: boolean
 	): InternalCsvCellValue[];
 	static parseLine(line: string, delimiter = ",", quote = '"', preserveQuotedEmpty = false): InternalCsvCellValue[] {
+		// Fast path: a line with no quote character has no quoted fields, so a native split is
+		// exact (no field was quoted, so finalizeParsedCellValue would be a no-op anyway).
+		if (line.indexOf(quote) === -1) {
+			return line.split(delimiter);
+		}
+
 		const values: InternalCsvCellValue[] = [];
 		let currentValue = "";
 		let insideQuotes = false;

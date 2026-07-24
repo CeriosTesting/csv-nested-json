@@ -161,17 +161,28 @@ export class JsonToCsv {
 			this.collectHeadersFromObject(obj, "", headerSet, arraySuffix);
 		}
 
-		// Sort headers for consistent output
-		// Primary keys (no dots) first, then nested keys
-		const headers = Array.from(headerSet);
-		headers.sort((a, b) => {
-			const aDepth = a.split(".").length;
-			const bDepth = b.split(".").length;
-			if (aDepth !== bDepth) return aDepth - bDepth;
-			return a.localeCompare(b);
+		// Sort headers for consistent output: primary keys (no dots) first, then nested keys.
+		// Precompute each header's depth once (via a decorate-sort-undecorate) so the comparator
+		// does not re-split every header O(n log n) times.
+		const decorated = Array.from(headerSet, header => ({ header, depth: this.countSegments(header) }));
+		decorated.sort((a, b) => {
+			if (a.depth !== b.depth) return a.depth - b.depth;
+			return a.header.localeCompare(b.header);
 		});
 
-		return headers;
+		return decorated.map(entry => entry.header);
+	}
+
+	/**
+	 * Count dot-separated segments in a header (i.e. its nesting depth) without allocating
+	 * an intermediate array via `split`.
+	 */
+	private static countSegments(header: string): number {
+		let count = 1;
+		for (let i = 0; i < header.length; i++) {
+			if (header[i] === ".") count++;
+		}
+		return count;
 	}
 
 	/**
@@ -299,13 +310,20 @@ export class JsonToCsv {
 			}
 		}
 
+		// The owning array path for each header is invariant across rows, so resolve it once
+		// instead of re-scanning arrayPaths for every header on every continuation row.
+		const arrayPathByHeader = new Map<string, string | null>();
+		for (const header of headers) {
+			arrayPathByHeader.set(header, this.findArrayPathForHeader(header, arrayPaths));
+		}
+
 		const rows: Record<string, string>[] = [];
 
 		for (let i = 0; i < maxArrayLength; i++) {
 			const row: Record<string, string> = {};
 
 			for (const header of headers) {
-				const arrayPath = this.findArrayPathForHeader(header, arrayPaths);
+				const arrayPath = arrayPathByHeader.get(header) ?? null;
 
 				if (arrayPath) {
 					const arr = arrayValues[arrayPath];

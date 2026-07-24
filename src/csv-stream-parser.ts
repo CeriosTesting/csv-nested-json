@@ -636,6 +636,12 @@ export class CsvStreamParser extends Transform {
 	private parseLine(line: string, preserveQuotedEmpty: false): string[];
 	private parseLine(line: string, preserveQuotedEmpty: true): InternalCsvCellValue[];
 	private parseLine(line: string, preserveQuotedEmpty: boolean): InternalCsvCellValue[] {
+		// Fast path: a line with no quote character has no quoted fields, so a native split is
+		// exact (no field was quoted, so finalizeParsedCellValue would be a no-op anyway).
+		if (line.indexOf(this.quote) === -1) {
+			return line.split(this.delimiter);
+		}
+
 		const values: InternalCsvCellValue[] = [];
 		let currentValue = "";
 		let insideQuotes = false;
@@ -838,6 +844,7 @@ export class CsvStreamParser extends Transform {
 		const result: NestedObject = {};
 		const preserveEmptyColumns = this.options.preserveEmptyColumnAsEmptyString === true;
 		const preserveEmptyStrings = this.options.preserveEmptyString !== false;
+		const arraySuffix = this.options.arraySuffixIndicator ?? "[]";
 
 		for (const [key, value] of Object.entries(record)) {
 			if (value === undefined) continue;
@@ -854,14 +861,15 @@ export class CsvStreamParser extends Transform {
 				normalizedValue = value;
 			}
 
-			// Remove array suffix if present
-			const arraySuffix = this.options.arraySuffixIndicator ?? "[]";
-			const normalizedKey = key
-				.split(".")
-				.map(part => (part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part))
-				.join(".");
+			// Split once and strip the array suffix from each segment in the same pass,
+			// instead of splitting, rejoining, and splitting again.
+			const parts = key.split(".");
+			for (let p = 0; p < parts.length; p++) {
+				if (parts[p].endsWith(arraySuffix)) {
+					parts[p] = parts[p].slice(0, -arraySuffix.length);
+				}
+			}
 
-			const parts = normalizedKey.split(".");
 			let current: NestedObject = result;
 
 			for (let i = 0; i < parts.length - 1; i++) {

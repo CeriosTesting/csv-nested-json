@@ -296,15 +296,25 @@ export class NestedJsonConverter {
 	private static normalizeHeaders(records: ConvertibleCsvRecord[], arraySuffix: string): InternalCsvRecord[] {
 		if (!arraySuffix) return records as InternalCsvRecord[];
 
+		// All records share the same key set, so compute the original -> normalized key mapping
+		// once and reuse it, instead of splitting/rejoining every key of every record.
+		const keyCache = new Map<string, string>();
+		const normalizeKey = (key: string): string => {
+			const cached = keyCache.get(key);
+			if (cached !== undefined) return cached;
+
+			const normalizedKey = key
+				.split(".")
+				.map(part => (part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part))
+				.join(".");
+			keyCache.set(key, normalizedKey);
+			return normalizedKey;
+		};
+
 		return records.map(record => {
 			const normalized: InternalCsvRecord = {};
 			for (const [key, value] of Object.entries(record)) {
-				// Remove all occurrences of the array suffix from the key
-				const normalizedKey = key
-					.split(".")
-					.map(part => (part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part))
-					.join(".");
-				normalized[normalizedKey] = value;
+				normalized[normalizeKey(key)] = value;
 			}
 			return normalized;
 		});
