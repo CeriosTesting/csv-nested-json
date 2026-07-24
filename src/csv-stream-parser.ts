@@ -127,6 +127,9 @@ export class CsvStreamParser extends Transform {
 	private dataRowIndex = 0;
 	private physicalLineNumber = 0;
 	private options: CsvStreamParserOptions;
+	// Options for the per-group converter, with stream-level `offset`/`limit` removed so they are
+	// not re-applied inside each group's convert() call.
+	private converterOptions: CsvStreamParserOptions;
 	private delimiter: string;
 	private quote: string;
 	private skipRows: number;
@@ -146,6 +149,10 @@ export class CsvStreamParser extends Transform {
 	// Limit tracking
 	private limit: number;
 	private limitReached = false;
+
+	// Offset tracking (records skipped before collecting output)
+	private offset: number;
+	private skippedForOffset = 0;
 
 	// Batch processing
 	private batchSize: number;
@@ -194,6 +201,7 @@ export class CsvStreamParser extends Transform {
 		// value. Chunk decoding is handled below by our own StringDecoder.
 		super(CsvStreamParser.toTransformOptions(options));
 		this.options = options;
+		this.converterOptions = { ...options, offset: undefined, limit: undefined };
 		this.delimiter = options.delimiter || ",";
 		this.quote = options.quote || '"';
 		assertDelimiterAndQuote(this.delimiter, this.quote);
@@ -210,6 +218,8 @@ export class CsvStreamParser extends Transform {
 		this.progressInterval = options.progressInterval ?? 100;
 		// Initialize limit
 		this.limit = options.limit ?? 0;
+		// Initialize offset (records skipped before any output is collected)
+		this.offset = options.offset && options.offset > 0 ? options.offset : 0;
 		// Initialize batch processing
 		this.batchSize = options.batchSize ?? 1;
 		// Initialize continuation-group guard
@@ -388,12 +398,13 @@ export class CsvStreamParser extends Transform {
 	private stripBomFromString(content: string): string {
 		if (content.length === 0) return content;
 
-		// UTF-8 BOM or UTF-16 BE BOM
+		// Normal case: a correctly decoded UTF-8 or UTF-16 BOM is U+FEFF.
 		if (content.charCodeAt(0) === 0xfeff) {
 			return content.slice(1);
 		}
 
-		// UTF-16 LE BOM
+		// Byte-swapped BOM: U+FFFE appears when a UTF-16BE file is decoded as UTF-16LE (Node has no
+		// native utf-16be encoding). Strip it defensively so the leading noncharacter is not kept.
 		if (content.charCodeAt(0) === 0xfffe) {
 			return content.slice(1);
 		}
@@ -677,7 +688,10 @@ export class CsvStreamParser extends Transform {
 		const recordsToFlush = this.groupedRecords;
 		this.groupedRecords = [];
 
-		const groupedOutput = NestedJsonConverter.convert(recordsToFlush, this.options);
+		// The stream applies `offset` and `limit` itself across the whole record stream. They must
+		// not leak into the per-group convert(), which would otherwise re-apply them to each single
+		// group's records (offset would slice every group away; limit is a no-op only by luck).
+		const groupedOutput = NestedJsonConverter.convert(recordsToFlush, this.converterOptions);
 		for (const record of groupedOutput) {
 			this.emitRecord(record);
 			if (this.limitReached) return;
@@ -688,6 +702,14 @@ export class CsvStreamParser extends Transform {
 	 * Emit a single parsed output record while respecting batching, limits, and progress callbacks.
 	 */
 	private emitRecord(outputRecord: NestedObject): void {
+		// Skip the first `offset` output records entirely: they must not be pushed, batched, or
+		// counted toward `limit`/progress, so `limit` caps the records *after* the offset window
+		// (parity with the buffered `groups.slice(offset, offset + limit)`).
+		if (this.skippedForOffset < this.offset) {
+			this.skippedForOffset++;
+			return;
+		}
+
 		// Handle batching
 		if (this.batchSize > 1) {
 			this.recordBatch.push(outputRecord as NestedObject);
@@ -854,8 +876,8 @@ export class CsvStreamParser extends Transform {
 	private toPublicRecord(record: InternalCsvRecord): CsvRecord {
 		const publicRecord: CsvRecord = {};
 
-		for (const [header, value] of Object.entries(record)) {
-			publicRecord[header] = toPublicCsvCellValue(value);
+		for (const header of Object.keys(record)) {
+			publicRecord[header] = toPublicCsvCellValue(record[header]);
 		}
 
 		return publicRecord;

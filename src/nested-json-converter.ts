@@ -1,6 +1,7 @@
 import { CsvParseError } from "./errors";
 import { type InternalCsvRecord, isQuotedEmptyCell } from "./internal-empty-cell";
 import {
+	buildUnflattenPlan,
 	needsValueTransformation,
 	resolveNullSet,
 	type TransformedRecord,
@@ -19,6 +20,13 @@ import type {
 } from "./types";
 
 type ConvertibleCsvRecord = CsvRecord | InternalCsvRecord;
+
+/**
+ * Minimum record count at which precomputing the unflatten path plan is worthwhile. Below this,
+ * building the plan Map costs more than the per-row `String.split` it saves (e.g. the streaming
+ * parser's per-continuation-group convert() calls).
+ */
+const UNFLATTEN_PLAN_MIN_ROWS = 128;
 
 /**
  * Nested JSON conversion utilities.
@@ -77,25 +85,46 @@ export class NestedJsonConverter {
 		// Detect forced array fields from headers (fields with array suffix indicator)
 		const forcedArrayFields = this.detectForcedArrayFields(records, arraySuffix);
 
+		// Normalize a dot-path header by stripping the array suffix from each segment. Cached so the
+		// mapping is computed once per distinct header and reused across every record.
+		// An empty suffix disables suffix stripping entirely — guard against it before the map, since
+		// `"x".endsWith("")` is always true and `"x".slice(0, -0)` would wrongly yield `""`.
+		const keyCache = new Map<string, string>();
+		const normalizeKey = arraySuffix
+			? (key: string): string => {
+					const cached = keyCache.get(key);
+					if (cached !== undefined) return cached;
+					const normalized = key
+						.split(".")
+						.map(part => (part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part))
+						.join(".");
+					keyCache.set(key, normalized);
+					return normalized;
+				}
+			: (key: string): string => key;
+
 		// Build hierarchy for forced array fields (for context-aware merging)
 		const allHeaders = Object.keys(records[0]);
-		const normalizedHeaders = allHeaders.map(h =>
-			h
-				.split(".")
-				.map(part => (part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part))
-				.join(".")
-		);
+		const normalizedHeaders = allHeaders.map(normalizeKey);
 		const hierarchy = this.buildForcedArrayHierarchy(forcedArrayFields, normalizedHeaders);
 
-		// Normalize headers by removing array suffix indicators
-		const normalizedRecords = this.normalizeHeaders(records, arraySuffix);
+		// Fuse header normalization (array-suffix stripping) and value transformation into a single
+		// pass over the records — previously two separate full-record allocations.
+		const transformNeeded = needsValueTransformation(options);
+		const transformedRecords: TransformedRecord[] = transformNeeded
+			? this.normalizeAndTransform(records, options, normalizeKey)
+			: records.map(record => this.normalizeRecordKeys(record, normalizeKey));
 
-		// Apply value transformations
-		const transformedRecords = this.applyValueTransformations(normalizedRecords, options);
-
-		// Determine identifier column from available normalized columns.
-		// A configured identifierColumn must exist, otherwise grouping semantics are ambiguous.
-		const availableColumns = Object.keys(normalizedRecords[0] ?? {});
+		// Determine the identifier column from the full normalized header set (order-preserving,
+		// deduped), independent of any per-record value omissions introduced by transformation.
+		const availableColumns: string[] = [];
+		const seenColumns = new Set<string>();
+		for (const normalized of normalizedHeaders) {
+			if (!seenColumns.has(normalized)) {
+				seenColumns.add(normalized);
+				availableColumns.push(normalized);
+			}
+		}
 		if (availableColumns.length === 0) {
 			throw new CsvParseError(
 				"No columns available after filtering. Cannot resolve identifier column for continuation row grouping."
@@ -145,16 +174,28 @@ export class NestedJsonConverter {
 			groups.push(currentGroup);
 		}
 
-		// Apply record limit (counts output records, i.e. groups). A partially buffered
-		// group is never split: each group maps to exactly one output object.
+		// Apply offset + limit (both count output records, i.e. groups). A partially buffered
+		// group is never split: each group maps to exactly one output object. `offset` skips
+		// leading groups; `limit` then caps the remainder, so together they select a window.
 		const limit = options.limit;
-		const limitedGroups = limit !== undefined && limit > 0 ? groups.slice(0, limit) : groups;
+		const offset = options.offset && options.offset > 0 ? options.offset : 0;
+		const hasLimit = limit !== undefined && limit > 0;
+		const limitedGroups =
+			offset > 0 || hasLimit ? groups.slice(offset, hasLimit ? offset + (limit as number) : undefined) : groups;
+
+		// Precompute the unflatten path plan once for the constant header set, so unflattening each
+		// row reuses the split segments instead of re-splitting every key of every row. The plan
+		// only pays off when amortized over many rows, so skip it for small inputs — notably the
+		// streaming parser, which calls convert() once per (typically tiny) continuation group and
+		// would otherwise rebuild the plan for every group with no benefit.
+		const unflattenPlan =
+			transformedRecords.length >= UNFLATTEN_PLAN_MIN_ROWS ? buildUnflattenPlan(availableColumns, options) : undefined;
 
 		// Process all groups with hierarchy-aware merging. Arrays are created ONLY for
 		// forced array fields (`[]` suffix). A repeated non-forced path within a group is
 		// treated as an error rather than being silently promoted to an array.
 		const processedGroups = limitedGroups.map(group =>
-			this.processGroupWithHierarchy(group, hierarchy, forcedArrayFields, arraySuffix, options)
+			this.processGroupWithHierarchy(group, hierarchy, forcedArrayFields, arraySuffix, options, unflattenPlan)
 		);
 
 		// Normalize all groups so forced array fields are consistently arrays.
@@ -172,23 +213,34 @@ export class NestedJsonConverter {
 	}
 
 	/**
-	 * Apply value transformations (null detection, auto-parse numbers, booleans, custom transformer).
+	 * Normalize headers and apply value transformations in a single pass.
 	 * Transformation order: nullValues → autoParseNumbers → autoParseBooleans → valueTransformer.
 	 *
-	 * Delegates to the shared {@link transformRecordValues} so the buffered and streaming paths
-	 * stay in lockstep.
+	 * Delegates to the shared {@link transformRecordValues} (passing the key normalizer so array
+	 * suffixes are stripped in the same pass) so the buffered and streaming paths stay in lockstep.
 	 */
-	private static applyValueTransformations(
-		records: InternalCsvRecord[],
-		options: CsvParserOptions
+	private static normalizeAndTransform(
+		records: ConvertibleCsvRecord[],
+		options: CsvParserOptions,
+		normalizeKey: (key: string) => string
 	): TransformedRecord[] {
-		// If no transformations are needed, return records as-is
-		if (!needsValueTransformation(options)) {
-			return records as TransformedRecord[];
-		}
-
 		const nullSet = resolveNullSet(options);
-		return records.map(record => transformRecordValues(record, options, nullSet));
+		return records.map(record => transformRecordValues(record as InternalCsvRecord, options, nullSet, normalizeKey));
+	}
+
+	/**
+	 * Produce a copy of the record with array-suffix-stripped keys, without value transformation.
+	 * Used when no value transformation is configured.
+	 */
+	private static normalizeRecordKeys(
+		record: ConvertibleCsvRecord,
+		normalizeKey: (key: string) => string
+	): TransformedRecord {
+		const normalized: TransformedRecord = {};
+		for (const key of Object.keys(record)) {
+			normalized[normalizeKey(key)] = (record as InternalCsvRecord)[key];
+		}
+		return normalized;
 	}
 
 	private static detectForcedArrayFields(records: ConvertibleCsvRecord[], arraySuffix: string): Set<string> {
@@ -220,37 +272,15 @@ export class NestedJsonConverter {
 		return forcedFields;
 	}
 
-	private static normalizeHeaders(records: ConvertibleCsvRecord[], arraySuffix: string): InternalCsvRecord[] {
-		if (!arraySuffix) return records as InternalCsvRecord[];
-
-		// All records share the same key set, so compute the original -> normalized key mapping
-		// once and reuse it, instead of splitting/rejoining every key of every record.
-		const keyCache = new Map<string, string>();
-		const normalizeKey = (key: string): string => {
-			const cached = keyCache.get(key);
-			if (cached !== undefined) return cached;
-
-			const normalizedKey = key
-				.split(".")
-				.map(part => (part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part))
-				.join(".");
-			keyCache.set(key, normalizedKey);
-			return normalizedKey;
-		};
-
-		return records.map(record => {
-			const normalized: InternalCsvRecord = {};
-			for (const [key, value] of Object.entries(record)) {
-				normalized[normalizeKey(key)] = value;
-			}
-			return normalized;
-		});
-	}
-
-	private static processGroup(rows: TransformedRecord[], arraySuffix: string, options: CsvParserOptions): NestedObject {
+	private static processGroup(
+		rows: TransformedRecord[],
+		arraySuffix: string,
+		options: CsvParserOptions,
+		plan?: Map<string, string[]>
+	): NestedObject {
 		const result: NestedObject = {};
 		for (const row of rows) {
-			const rowObj = this.unflatten(row, options);
+			const rowObj = this.unflatten(row, options, plan);
 			this.deepMerge(result, rowObj, arraySuffix);
 		}
 		return result;
@@ -394,13 +424,14 @@ export class NestedJsonConverter {
 		hierarchy: ForcedArrayHierarchy,
 		forcedArrayFields: Set<string>,
 		arraySuffix: string,
-		options: CsvParserOptions
+		options: CsvParserOptions,
+		plan?: Map<string, string[]>
 	): NestedObject {
 		if (rows.length === 0) return {};
 
 		// If no forced array fields, use the simple merge
 		if (forcedArrayFields.size === 0) {
-			return this.processGroup(rows, arraySuffix, options);
+			return this.processGroup(rows, arraySuffix, options, plan);
 		}
 
 		const result: NestedObject = {};
@@ -409,7 +440,7 @@ export class NestedJsonConverter {
 		for (let i = 0; i < rows.length; i++) {
 			const row = rows[i];
 			const isFirstRow = i === 0;
-			const unflattened = this.unflatten(row, options);
+			const unflattened = this.unflatten(row, options, plan);
 
 			if (isFirstRow) {
 				// First row: merge normally and track last items for each forced array
@@ -885,10 +916,15 @@ export class NestedJsonConverter {
 		return this.ensureArrayAtPath(obj, relativePath);
 	}
 
-	private static unflatten(row: TransformedRecord, options: CsvParserOptions): NestedObject {
+	private static unflatten(
+		row: TransformedRecord,
+		options: CsvParserOptions,
+		plan?: Map<string, string[]>
+	): NestedObject {
 		// Headers are already suffix-normalized upstream, so the shared helper's suffix stripping
-		// is a no-op here; it is shared purely to keep the two parsing paths in lockstep.
-		return unflattenRecord(row, options);
+		// is a no-op here; it is shared purely to keep the two parsing paths in lockstep. The
+		// precomputed `plan` reuses the per-key split segments across every row.
+		return unflattenRecord(row, options, plan);
 	}
 
 	private static isEffectivelyEmptyValue(value: unknown): boolean {

@@ -3,6 +3,9 @@ import fs from "node:fs";
 import { assertDelimiterAndQuote } from "./option-validation";
 import type { CsvParserOptions, NestedObject, NestedValue } from "./types";
 
+/** UTF-8 byte order mark (U+FEFF), prepended to output when `writeBom` is enabled. */
+const UTF8_BOM = "﻿";
+
 /**
  * Options for JSON to CSV conversion.
  */
@@ -21,6 +24,51 @@ export interface JsonToCsvOptions extends Pick<
 	 * @default true
 	 */
 	includeHeader?: boolean;
+
+	/**
+	 * Wrap every field in the quote character, regardless of whether it contains a delimiter,
+	 * quote, or newline. Useful for consumers that require uniformly quoted output.
+	 * @default false
+	 */
+	quoteAll?: boolean;
+
+	/**
+	 * Prepend a UTF-8 byte order mark (`﻿`) to the output. Helps spreadsheet applications
+	 * (notably Excel) detect UTF-8 encoding when opening the file.
+	 * @default false
+	 */
+	writeBom?: boolean;
+
+	/**
+	 * Append a trailing line ending after the final row. When `false`, the output has no final
+	 * newline (matching the previous behavior).
+	 * @default false
+	 */
+	trailingNewline?: boolean;
+
+	/**
+	 * Explicit header columns, in the exact order they should appear. When provided, headers are
+	 * used as-is instead of being collected from the data, so columns can be reordered, subset, or
+	 * pinned. Keys not listed are dropped; listed keys missing from a record become empty cells.
+	 *
+	 * Columns may use dot-notation and the array suffix (e.g. `person.name`, `tags[]`) — for
+	 * `arrayMode: 'rows'` an array-owning column must carry the suffix so it re-parses as an array.
+	 *
+	 * @example
+	 * ```typescript
+	 * JsonToCsv.stringify(data, { columns: ['id', 'name', 'tags[]'] });
+	 * ```
+	 */
+	columns?: string[];
+
+	/**
+	 * Whether to sort auto-collected headers (primary keys first, then nested keys alphabetically).
+	 * When `false`, headers keep first-seen insertion order across the input records instead.
+	 * Ignored when {@link JsonToCsvOptions.columns} is provided.
+	 *
+	 * @default true
+	 */
+	sortHeaders?: boolean;
 
 	/**
 	 * String used to represent an explicit `null` value in output, so it can be distinguished from
@@ -99,21 +147,22 @@ export class JsonToCsv {
 		const lineEnding = options.lineEnding || "\n";
 		const includeHeader = options.includeHeader !== false;
 		const arrayMode = options.arrayMode || "rows";
+		const quoteAll = options.quoteAll === true;
 
 		// Only the continuation-row mode reconstructs arrays on re-parse, and that requires
 		// the array suffix in the header so the parser forces those columns back into arrays.
 		// In 'json' mode arrays live in a single cell, so no suffix is emitted.
 		const arraySuffix = arrayMode === "rows" ? (options.arraySuffixIndicator ?? "[]") : "";
 
-		// Collect all unique headers from all objects
-		const headers = this.collectHeaders(data, arraySuffix);
+		// Use explicit columns when provided; otherwise collect unique headers from all objects.
+		const headers = options.columns ?? this.collectHeaders(data, arraySuffix, options.sortHeaders !== false);
 
 		// Build CSV rows
 		const rows: string[] = [];
 
 		// Add header row
 		if (includeHeader) {
-			rows.push(headers.map(h => this.escapeValue(h, delimiter, quote)).join(delimiter));
+			rows.push(headers.map(h => this.escapeValue(h, delimiter, quote, quoteAll)).join(delimiter));
 		}
 
 		// Add data rows
@@ -122,13 +171,17 @@ export class JsonToCsv {
 			for (const flatRow of flatRows) {
 				const values = headers.map(header => {
 					const value = flatRow[header];
-					return this.escapeValue(value, delimiter, quote);
+					return this.escapeValue(value, delimiter, quote, quoteAll);
 				});
 				rows.push(values.join(delimiter));
 			}
 		}
 
-		return rows.join(lineEnding);
+		let output = rows.join(lineEnding);
+		if (options.trailingNewline) output += lineEnding;
+		// Prepend a UTF-8 BOM so spreadsheet apps (Excel) detect UTF-8 reliably.
+		if (options.writeBom) output = UTF8_BOM + output;
+		return output;
 	}
 
 	/**
@@ -174,9 +227,10 @@ export class JsonToCsv {
 	 * @internal Used by {@link JsonToCsvStream} to derive headers from the first record(s).
 	 */
 	static resolveHeaders(data: NestedObject[], options: JsonToCsvOptions = {}): string[] {
+		if (options.columns) return options.columns;
 		const arrayMode = options.arrayMode || "rows";
 		const arraySuffix = arrayMode === "rows" ? (options.arraySuffixIndicator ?? "[]") : "";
-		return this.collectHeaders(data, arraySuffix);
+		return this.collectHeaders(data, arraySuffix, options.sortHeaders !== false);
 	}
 
 	/**
@@ -188,7 +242,8 @@ export class JsonToCsv {
 		const delimiter = options.delimiter || ",";
 		const quote = options.quote || '"';
 		assertDelimiterAndQuote(delimiter, quote);
-		return headers.map(h => this.escapeValue(h, delimiter, quote)).join(delimiter);
+		const quoteAll = options.quoteAll === true;
+		return headers.map(h => this.escapeValue(h, delimiter, quote, quoteAll)).join(delimiter);
 	}
 
 	/**
@@ -203,10 +258,11 @@ export class JsonToCsv {
 		assertDelimiterAndQuote(delimiter, quote);
 		const arrayMode = options.arrayMode || "rows";
 		const arraySuffix = arrayMode === "rows" ? (options.arraySuffixIndicator ?? "[]") : "";
+		const quoteAll = options.quoteAll === true;
 
 		const flatRows = this.flattenObject(obj, headers, arrayMode, arraySuffix, options.nullValue ?? "");
 		return flatRows.map(flatRow =>
-			headers.map(header => this.escapeValue(flatRow[header], delimiter, quote)).join(delimiter)
+			headers.map(header => this.escapeValue(flatRow[header], delimiter, quote, quoteAll)).join(delimiter)
 		);
 	}
 
@@ -214,11 +270,16 @@ export class JsonToCsv {
 	 * Collect all unique headers from an array of nested objects.
 	 * Headers are generated using dot-notation for nested properties.
 	 */
-	private static collectHeaders(data: NestedObject[], arraySuffix: string): string[] {
+	private static collectHeaders(data: NestedObject[], arraySuffix: string, sort = true): string[] {
 		const headerSet = new Set<string>();
 
 		for (const obj of data) {
 			this.collectHeadersFromObject(obj, "", headerSet, arraySuffix);
+		}
+
+		// Without sorting, preserve first-seen insertion order across the input records.
+		if (!sort) {
+			return Array.from(headerSet);
 		}
 
 		// Sort headers for consistent output: primary keys (no dots) first, then nested keys.
@@ -480,15 +541,22 @@ export class JsonToCsv {
 	 * Escape a value for CSV output.
 	 * Wraps in quotes if the value contains delimiter, quote, or newline.
 	 */
-	private static escapeValue(value: string | undefined | null, delimiter: string, quote: string): string {
+	private static escapeValue(
+		value: string | undefined | null,
+		delimiter: string,
+		quote: string,
+		quoteAll = false
+	): string {
 		if (value === undefined || value === null) {
-			return "";
+			// An empty cell is still force-wrapped under quoteAll so every column is quoted uniformly.
+			return quoteAll ? quote + quote : "";
 		}
 
 		const str = String(value);
 
 		// Check if escaping is needed
-		const needsEscape = str.includes(delimiter) || str.includes(quote) || str.includes("\n") || str.includes("\r");
+		const needsEscape =
+			quoteAll || str.includes(delimiter) || str.includes(quote) || str.includes("\n") || str.includes("\r");
 
 		if (needsEscape) {
 			// Escape quotes by doubling them. Use split/join so a regex-special quote

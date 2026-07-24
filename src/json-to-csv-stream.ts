@@ -3,18 +3,16 @@ import { Transform, type TransformCallback, type TransformOptions } from "node:s
 import { JsonToCsv, type JsonToCsvOptions } from "./json-to-csv";
 import type { NestedObject } from "./types";
 
+/** UTF-8 byte order mark (U+FEFF), prepended to output when `writeBom` is enabled. */
+const UTF8_BOM = "﻿";
+
 /**
  * Options for the streaming JSON-to-CSV writer.
  */
 export interface JsonToCsvStreamOptions extends JsonToCsvOptions, TransformOptions {
-	/**
-	 * Explicit header columns (in the order they should appear). May use dot-notation and the array
-	 * suffix (e.g. `person.name`, `tags[]`).
-	 *
-	 * When omitted, headers are derived from the **first** object written to the stream. Keys on
-	 * later objects that are not part of the header set are dropped; missing keys become empty cells.
-	 */
-	columns?: string[];
+	// `columns` is inherited from JsonToCsvOptions. For the stream, when it is omitted headers are
+	// derived from the **first** object written (the buffered writer unions all records instead).
+	// Keys not in the header set are dropped on later objects; missing keys become empty cells.
 }
 
 /**
@@ -43,9 +41,12 @@ export class JsonToCsvStream extends Transform {
 	private headers: string[] | null;
 	private headerEmitted = false;
 	private firstLine = true;
+	private anyLineEmitted = false;
 	private readonly csvOptions: JsonToCsvOptions;
 	private readonly includeHeader: boolean;
 	private readonly lineEnding: string;
+	private readonly writeBom: boolean;
+	private readonly trailingNewline: boolean;
 
 	constructor(options: JsonToCsvStreamOptions = {}) {
 		// `encoding` targets file output, not the Transform's readable side; drop it so Readable
@@ -56,6 +57,8 @@ export class JsonToCsvStream extends Transform {
 		this.csvOptions = options;
 		this.includeHeader = options.includeHeader !== false;
 		this.lineEnding = options.lineEnding || "\n";
+		this.writeBom = options.writeBom === true;
+		this.trailingNewline = options.trailingNewline === true;
 		this.headers = columns ?? null;
 	}
 
@@ -85,6 +88,10 @@ export class JsonToCsvStream extends Transform {
 			if (this.headers) {
 				this.emitHeaderIfNeeded();
 			}
+			// Append a final line ending after the last emitted line when requested.
+			if (this.trailingNewline && this.anyLineEmitted) {
+				this.push(this.lineEnding);
+			}
 			callback();
 		} catch (error) {
 			callback(error instanceof Error ? error : new Error(String(error)));
@@ -100,9 +107,11 @@ export class JsonToCsvStream extends Transform {
 	}
 
 	private pushLine(line: string): void {
+		this.anyLineEmitted = true;
 		if (this.firstLine) {
 			this.firstLine = false;
-			this.push(line);
+			// Prepend a UTF-8 BOM to the very first chunk so Excel detects UTF-8.
+			this.push(this.writeBom ? UTF8_BOM + line : line);
 		} else {
 			this.push(this.lineEnding + line);
 		}

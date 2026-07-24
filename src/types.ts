@@ -518,6 +518,23 @@ export interface CsvParserOptions {
 	limit?: number;
 
 	/**
+	 * Number of output records to skip before collecting results.
+	 * Applied before {@link CsvParserOptions.limit}, so `offset` + `limit` together select a
+	 * window of records (useful for pagination). Like `limit`, this counts grouped output
+	 * records (continuation-row groups map to a single record and are never split), and it is
+	 * applied after {@link CsvParserOptions.rowFilter}.
+	 *
+	 * @default 0
+	 *
+	 * @example
+	 * ```typescript
+	 * // Skip the first 100 records, then take the next 50
+	 * CsvParser.parseString(csv, { offset: 100, limit: 50 });
+	 * ```
+	 */
+	offset?: number;
+
+	/**
 	 * List of column names to include in the output.
 	 * Only these columns will be present in parsed records.
 	 * Cannot be used together with excludeColumns.

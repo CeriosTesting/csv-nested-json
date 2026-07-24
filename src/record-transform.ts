@@ -43,11 +43,16 @@ export function needsValueTransformation(options: CsvParserOptions): boolean {
  *
  * Callers should guard with {@link needsValueTransformation} and skip this entirely when no
  * transformation is configured.
+ *
+ * @param keyMapper - Optional mapping applied to each record key before it is used as the output
+ *   key and passed to `valueTransformer`. The buffered converter uses this to fuse header
+ *   normalization (array-suffix stripping) into the same pass, avoiding a second full-record copy.
  */
 export function transformRecordValues(
 	record: InternalCsvRecord,
 	options: CsvParserOptions,
-	nullSet: Set<string>
+	nullSet: Set<string>,
+	keyMapper?: (key: string) => string
 ): TransformedRecord {
 	const {
 		autoParseNumbers,
@@ -60,7 +65,9 @@ export function transformRecordValues(
 
 	const transformed: TransformedRecord = {};
 
-	for (const [header, value] of Object.entries(record)) {
+	for (const rawHeader of Object.keys(record)) {
+		const value = record[rawHeader];
+		const header = keyMapper ? keyMapper(rawHeader) : rawHeader;
 		let transformedValue: TransformedRecordValue = value;
 
 		if (isQuotedEmptyCell(value)) {
@@ -129,17 +136,59 @@ export function transformRecordValues(
 }
 
 /**
+ * Precompute the dot-path segments (with the array suffix stripped) for a fixed set of keys.
+ *
+ * The header set is constant across every row of a parse, so splitting each key once and reusing
+ * the result avoids re-running `String.split` + suffix stripping for every value of every row —
+ * the dominant cost when unflattening wide or tall datasets. The returned segment arrays are
+ * treated as read-only by {@link unflattenRecord}.
+ */
+export function buildUnflattenPlan(keys: Iterable<string>, options: CsvParserOptions): Map<string, string[]> {
+	const arraySuffix = options.arraySuffixIndicator ?? "[]";
+	const plan = new Map<string, string[]>();
+
+	for (const key of keys) {
+		if (plan.has(key)) continue;
+		plan.set(key, splitPath(key, arraySuffix));
+	}
+
+	return plan;
+}
+
+/** Split a dot-path into segments, stripping the array suffix from each segment. */
+function splitPath(key: string, arraySuffix: string): string[] {
+	const parts = key.split(".");
+	if (arraySuffix) {
+		for (let p = 0; p < parts.length; p++) {
+			if (parts[p].endsWith(arraySuffix)) {
+				parts[p] = parts[p].slice(0, -arraySuffix.length);
+			}
+		}
+	}
+	return parts;
+}
+
+/**
  * Unflatten a record with dot-notation keys into a nested object, stripping the array suffix from
  * each path segment. Empty-cell handling honors `preserveEmptyString` (quoted empties) and
  * `preserveEmptyColumnAsEmptyString` (unquoted empties).
+ *
+ * @param plan - Optional precomputed path plan from {@link buildUnflattenPlan}. When a key is
+ *   present, its cached segments are reused instead of re-splitting; otherwise the split happens
+ *   inline (keeps external callers and the streaming fallback path working without a plan).
  */
-export function unflattenRecord(record: TransformedRecord, options: CsvParserOptions): NestedObject {
+export function unflattenRecord(
+	record: TransformedRecord,
+	options: CsvParserOptions,
+	plan?: Map<string, string[]>
+): NestedObject {
 	const result: NestedObject = {};
 	const preserveEmptyColumns = options.preserveEmptyColumnAsEmptyString === true;
 	const preserveEmptyStrings = options.preserveEmptyString !== false;
 	const arraySuffix = options.arraySuffixIndicator ?? "[]";
 
-	for (const [key, value] of Object.entries(record)) {
+	for (const key of Object.keys(record)) {
+		const value = record[key];
 		if (value === undefined) continue;
 
 		let normalizedValue: NestedValue;
@@ -154,15 +203,8 @@ export function unflattenRecord(record: TransformedRecord, options: CsvParserOpt
 			normalizedValue = value as NestedValue;
 		}
 
-		// Split once and strip the array suffix from each segment in the same pass.
-		const parts = key.split(".");
-		if (arraySuffix) {
-			for (let p = 0; p < parts.length; p++) {
-				if (parts[p].endsWith(arraySuffix)) {
-					parts[p] = parts[p].slice(0, -arraySuffix.length);
-				}
-			}
-		}
+		// Reuse the precomputed segments when available; otherwise split inline.
+		const parts = plan?.get(key) ?? splitPath(key, arraySuffix);
 
 		let current: NestedObject = result;
 		for (let i = 0; i < parts.length - 1; i++) {

@@ -316,8 +316,8 @@ export class CsvReader {
 	private static toPublicRecord(record: InternalCsvRecord): CsvRecord {
 		const publicRecord: CsvRecord = {};
 
-		for (const [header, value] of Object.entries(record)) {
-			publicRecord[header] = toPublicCsvCellValue(value);
+		for (const header of Object.keys(record)) {
+			publicRecord[header] = toPublicCsvCellValue(record[header]);
 		}
 
 		return publicRecord;
@@ -339,12 +339,13 @@ export class CsvReader {
 	static stripBom(content: string): string {
 		if (content.length === 0) return content;
 
-		// Check for UTF-8 BOM or UTF-16 BE BOM (both are \uFEFF when decoded)
+		// Normal case: a correctly decoded UTF-8 or UTF-16 BOM is U+FEFF.
 		if (content.charCodeAt(0) === 0xfeff) {
 			return content.slice(1);
 		}
 
-		// Check for UTF-16 LE BOM (\uFFFE when decoded as UTF-8)
+		// Byte-swapped BOM: U+FFFE appears when a UTF-16BE file is decoded as UTF-16LE (Node has no
+		// native utf-16be encoding). Strip it defensively so the leading noncharacter is not kept.
 		if (content.charCodeAt(0) === 0xfffe) {
 			return content.slice(1);
 		}
@@ -354,6 +355,10 @@ export class CsvReader {
 
 	/**
 	 * Split CSV content into lines, respecting quoted fields that may contain newlines.
+	 *
+	 * @deprecated No longer used internally — {@link CsvReader.parse} tokenizes rows and cells in a
+	 *   single pass. Retained for backward compatibility; prefer {@link CsvParser} or
+	 *   {@link CsvReader.parse}. May be removed in a future major.
 	 *
 	 * @param content - The CSV content
 	 * @param quote - The quote character (default: '"')
@@ -417,6 +422,10 @@ export class CsvReader {
 
 	/**
 	 * Parse a single CSV line into an array of values, respecting quotes and delimiters.
+	 *
+	 * @deprecated No longer used internally — {@link CsvReader.parse} tokenizes rows and cells in a
+	 *   single pass. Retained for backward compatibility; prefer {@link CsvParser} or
+	 *   {@link CsvReader.parse}. May be removed in a future major.
 	 *
 	 * @param line - A single line of CSV data
 	 * @param delimiter - The field delimiter (default: ',')
