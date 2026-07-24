@@ -192,11 +192,11 @@ export class JsonToCsv {
 					// Array of primitives
 					headers.add(fullKey);
 				}
-			} else if (value && typeof value === "object") {
+			} else if (value && typeof value === "object" && !(value instanceof Date)) {
 				// Nested object
 				this.collectHeadersFromObject(value as NestedObject, fullKey, headers);
 			} else {
-				// Primitive value
+				// Primitive value (or Date, treated as a scalar)
 				headers.add(fullKey);
 			}
 		}
@@ -258,9 +258,10 @@ export class JsonToCsv {
 					// Array of primitives
 					arrayValues[fullKey] = value;
 				}
-			} else if (value && typeof value === "object") {
+			} else if (value && typeof value === "object" && !(value instanceof Date)) {
 				this.flattenToPathValues(value as NestedObject, fullKey, flatValues, arrayValues);
 			} else {
+				// Primitive value (or Date, treated as a scalar)
 				flatValues[fullKey] = value;
 			}
 		}
@@ -364,6 +365,10 @@ export class JsonToCsv {
 		if (value === null || value === undefined) {
 			return "";
 		}
+		if (value instanceof Date) {
+			// Invalid dates stringify to "Invalid Date" via toISOString throwing; guard it.
+			return Number.isNaN(value.getTime()) ? "" : value.toISOString();
+		}
 		if (typeof value === "object") {
 			return JSON.stringify(value);
 		}
@@ -385,8 +390,9 @@ export class JsonToCsv {
 		const needsEscape = str.includes(delimiter) || str.includes(quote) || str.includes("\n") || str.includes("\r");
 
 		if (needsEscape) {
-			// Escape quotes by doubling them
-			const escaped = str.replace(new RegExp(quote, "g"), quote + quote);
+			// Escape quotes by doubling them. Use split/join so a regex-special quote
+			// character (e.g. ".", "|", "*") is treated literally.
+			const escaped = str.split(quote).join(quote + quote);
 			return quote + escaped + quote;
 		}
 

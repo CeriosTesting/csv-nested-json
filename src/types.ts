@@ -426,22 +426,14 @@ export interface CsvParserOptions {
 	defaultValues?: Record<string, string>;
 
 	/**
-	 * Automatically parse date strings to Date objects.
-	 * Uses JavaScript's Date.parse() for recognition.
-	 * @default false
-	 *
-	 * @example
-	 * ```typescript
-	 * // '2024-01-15' becomes Date object
-	 * CsvParser.parseString(csv, { autoParseDates: true });
-	 * ```
-	 */
-	autoParseDates?: boolean;
-
-	/**
 	 * Values to treat as null.
 	 * Case-insensitive matching.
-	 * @default ['null', 'NULL', 'nil', 'NIL', '']
+	 *
+	 * @remarks
+	 * Null detection is opt-in: it runs only when this option is provided. When omitted,
+	 * values such as `'null'` are left untouched as plain strings. When you do pass this
+	 * option, it fully replaces the built-in set (`['null', 'NULL', 'nil', 'NIL']`);
+	 * include an empty string `''` to also treat empty cells as null.
 	 *
 	 * @example
 	 * ```typescript

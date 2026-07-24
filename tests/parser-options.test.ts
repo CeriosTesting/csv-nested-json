@@ -236,79 +236,35 @@ describe("Parser Options - New Features", () => {
 	});
 
 	// =============================================================================
-	// Date Parsing Tests
+	// Date Handling Tests
 	// =============================================================================
-	describe("autoParseDates", () => {
-		it("should parse ISO date strings", () => {
+	// The built-in `autoParseDates` option was removed: Date.parse recognition is too
+	// loose/locale-dependent. Date-looking strings now stay strings; callers that want
+	// Date objects can produce them explicitly via `valueTransformer`.
+	describe("date handling", () => {
+		it("leaves ISO date strings as plain strings by default", () => {
 			const csv = "id,created\n1,2024-01-15";
 
-			const result = CsvParser.parseString(csv, { autoParseDates: true });
+			const result = CsvParser.parseString(csv);
 
 			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("created");
+			expect(result[0]).toHaveProperty("created", "2024-01-15");
+		});
+
+		it("supports producing Date objects via valueTransformer", () => {
+			const csv = "id,created\n1,2024-01-15";
+
+			const result = CsvParser.parseString(csv, {
+				valueTransformer: (value, header) =>
+					header === "created" && typeof value === "string" ? new Date(value) : value,
+			});
+
+			expect(result).toHaveLength(1);
 			const created = (result[0] as { created: Date }).created;
 			expect(created).toBeInstanceOf(Date);
-			expect(created.getFullYear()).toBe(2024);
-			expect(created.getMonth()).toBe(0); // January
-			expect(created.getDate()).toBe(15);
-		});
-
-		it("should parse ISO datetime strings", () => {
-			const csv = "id,timestamp\n1,2024-01-15T10:30:00Z";
-
-			const result = CsvParser.parseString(csv, { autoParseDates: true });
-
-			expect(result).toHaveLength(1);
-			const timestamp = (result[0] as { timestamp: Date }).timestamp;
-			expect(timestamp).toBeInstanceOf(Date);
-			expect(timestamp.getFullYear()).toBe(2024);
-		});
-
-		it("should not parse pure numbers as dates", () => {
-			const csv = "id,value\n1,12345";
-
-			const result = CsvParser.parseString(csv, {
-				autoParseDates: true,
-				autoParseNumbers: false,
-			});
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("value", "12345");
-		});
-
-		it("should leave non-date strings unchanged", () => {
-			const csv = "id,name\n1,John Doe";
-
-			const result = CsvParser.parseString(csv, { autoParseDates: true });
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("name", "John Doe");
-		});
-
-		it("should work with autoParseNumbers", () => {
-			const csv = "id,created,count\n1,2024-01-15,42";
-
-			const result = CsvParser.parseString(csv, {
-				autoParseDates: true,
-				autoParseNumbers: true,
-			});
-
-			expect(result).toHaveLength(1);
-			expect((result[0] as { created: Date }).created).toBeInstanceOf(Date);
-			expect(result[0]).toHaveProperty("count", 42);
-		});
-
-		it("should not parse numbers when autoParseNumbers is also enabled", () => {
-			const csv = "id,value\n1,42";
-
-			const result = CsvParser.parseString(csv, {
-				autoParseDates: true,
-				autoParseNumbers: true,
-			});
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("value", 42);
-			expect(typeof (result[0] as { value: number }).value).toBe("number");
+			expect(created.getUTCFullYear()).toBe(2024);
+			expect(created.getUTCMonth()).toBe(0); // January
+			expect(created.getUTCDate()).toBe(15);
 		});
 	});
 
@@ -475,9 +431,19 @@ describe("Parser Options - New Features", () => {
 			expect(results[1]).toHaveProperty("status", "active");
 		});
 
-		it("should parse dates", async () => {
+		it("leaves date-looking strings as strings", async () => {
+			const parser = new CsvStreamParser();
+
+			const results = await collectStream(parser, "id,created\n1,2024-01-15");
+
+			expect(results).toHaveLength(1);
+			expect(results[0]).toHaveProperty("created", "2024-01-15");
+		});
+
+		it("supports Date objects via valueTransformer", async () => {
 			const parser = new CsvStreamParser({
-				autoParseDates: true,
+				valueTransformer: (value, header) =>
+					header === "created" && typeof value === "string" ? new Date(value) : value,
 			});
 
 			const results = await collectStream(parser, "id,created\n1,2024-01-15");
@@ -635,7 +601,8 @@ describe("Parser Options - New Features", () => {
 				nullValues: ["null"],
 				nullRepresentation: "null",
 				autoParseNumbers: true,
-				autoParseDates: true,
+				valueTransformer: (value, header) =>
+					header === "created" && typeof value === "string" ? new Date(value) : value,
 			});
 
 			expect(result).toHaveLength(1);

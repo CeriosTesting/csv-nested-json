@@ -9,6 +9,7 @@ import type {
 	NestedValue,
 	RowContext,
 } from "./types";
+import { applyNullRepresentation, tryParseBoolean, tryParseNumber } from "./value-parsers";
 
 type ConvertibleCsvRecord = CsvRecord | InternalCsvRecord;
 type TransformedRecordValue = string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL;
@@ -139,8 +140,13 @@ export class NestedJsonConverter {
 			groups.push(currentGroup);
 		}
 
+		// Apply record limit (counts output records, i.e. groups). A partially buffered
+		// group is never split: each group maps to exactly one output object.
+		const limit = options.limit;
+		const limitedGroups = limit !== undefined && limit > 0 ? groups.slice(0, limit) : groups;
+
 		// First pass: process all groups with hierarchy-aware merging
-		const processedGroups = groups.map(group =>
+		const processedGroups = limitedGroups.map(group =>
 			this.processGroupWithHierarchy(group, hierarchy, forcedArrayFields, options)
 		);
 
@@ -165,8 +171,8 @@ export class NestedJsonConverter {
 	}
 
 	/**
-	 * Apply value transformations (null detection, auto-parse numbers, booleans, dates, custom transformer).
-	 * Transformation order: nullValues → autoParseNumbers → autoParseBooleans → autoParseDates → valueTransformer
+	 * Apply value transformations (null detection, auto-parse numbers, booleans, custom transformer).
+	 * Transformation order: nullValues → autoParseNumbers → autoParseBooleans → valueTransformer
 	 */
 	private static applyValueTransformations(
 		records: InternalCsvRecord[],
@@ -176,7 +182,6 @@ export class NestedJsonConverter {
 			autoParseNumbers,
 			preserveUnsafeIntegersAsString,
 			autoParseBooleans,
-			autoParseDates,
 			valueTransformer,
 			nullValues,
 			nullRepresentation,
@@ -186,7 +191,7 @@ export class NestedJsonConverter {
 		const nullSet = new Set((nullValues ?? ["null", "NULL", "nil", "NIL"]).map(v => v.toLowerCase()));
 
 		// If no transformations are needed, return records as-is
-		if (!autoParseNumbers && !autoParseBooleans && !autoParseDates && !valueTransformer && nullValues === undefined) {
+		if (!autoParseNumbers && !autoParseBooleans && !valueTransformer && nullValues === undefined) {
 			return records as TransformedRecord[];
 		}
 
@@ -198,7 +203,7 @@ export class NestedJsonConverter {
 
 				if (isQuotedEmptyCell(value)) {
 					if (nullValues !== undefined && nullSet.has("")) {
-						transformedValue = this.applyNullRepresentation(nullRepresentation);
+						transformedValue = applyNullRepresentation(nullRepresentation);
 						if (nullRepresentation === "omit") {
 							continue;
 						}
@@ -212,7 +217,7 @@ export class NestedJsonConverter {
 				if (value === "") {
 					// Check if empty string is in nullValues
 					if (nullValues !== undefined && nullSet.has("")) {
-						transformedValue = this.applyNullRepresentation(nullRepresentation);
+						transformedValue = applyNullRepresentation(nullRepresentation);
 						if (nullRepresentation === "omit") {
 							continue; // Skip this field entirely
 						}
@@ -223,7 +228,7 @@ export class NestedJsonConverter {
 
 				// Step 0: Check for null values (before number/boolean parsing)
 				if (nullValues !== undefined && nullSet.has(value.toLowerCase())) {
-					const nullVal = this.applyNullRepresentation(nullRepresentation);
+					const nullVal = applyNullRepresentation(nullRepresentation);
 					if (nullRepresentation === "omit") {
 						continue; // Skip this field entirely
 					}
@@ -233,7 +238,7 @@ export class NestedJsonConverter {
 
 				// Step 1: Auto-parse numbers
 				if (autoParseNumbers) {
-					const parsed = this.tryParseNumber(value, preserveUnsafeIntegersAsString);
+					const parsed = tryParseNumber(value, preserveUnsafeIntegersAsString);
 					if (parsed !== null) {
 						transformedValue = parsed;
 					}
@@ -241,21 +246,13 @@ export class NestedJsonConverter {
 
 				// Step 2: Auto-parse booleans (only if still a string)
 				if (autoParseBooleans && typeof transformedValue === "string") {
-					const parsed = this.tryParseBoolean(value);
+					const parsed = tryParseBoolean(value);
 					if (parsed !== null) {
 						transformedValue = parsed;
 					}
 				}
 
-				// Step 3: Auto-parse dates (only if still a string)
-				if (autoParseDates && typeof transformedValue === "string") {
-					const parsed = this.tryParseDate(value);
-					if (parsed !== null) {
-						transformedValue = parsed;
-					}
-				}
-
-				// Step 4: Apply custom transformer
+				// Step 3: Apply custom transformer
 				if (valueTransformer) {
 					transformedValue = valueTransformer(transformedValue as string | number | boolean, header) as
 						| string
@@ -269,78 +266,6 @@ export class NestedJsonConverter {
 
 			return transformed;
 		});
-	}
-
-	/**
-	 * Apply null representation based on option.
-	 */
-	private static applyNullRepresentation(
-		representation: CsvParserOptions["nullRepresentation"]
-	): null | undefined | string {
-		switch (representation) {
-			case "null":
-				return null;
-			case "undefined":
-				return undefined;
-			case "empty-string":
-				return "";
-			default:
-				return undefined;
-		}
-	}
-
-	/**
-	 * Try to parse a string as a number.
-	 * Returns null if the string is not a valid number.
-	 */
-	private static tryParseNumber(value: string, preserveUnsafeIntegersAsString?: boolean): number | string | null {
-		// Don't parse empty strings or whitespace-only
-		if (value.trim() === "") return null;
-
-		// Don't parse strings that look like they might be IDs or codes
-		// (e.g., leading zeros like "007" or "00123")
-		if (/^0\d+$/.test(value)) return null;
-
-		const parsed = Number(value);
-
-		// Check if it's a valid finite number
-		if (!Number.isNaN(parsed) && Number.isFinite(parsed)) {
-			if (preserveUnsafeIntegersAsString && /^-?\d+$/.test(value) && !Number.isSafeInteger(parsed)) {
-				return value;
-			}
-			return parsed;
-		}
-
-		return null;
-	}
-
-	/**
-	 * Try to parse a string as a boolean.
-	 * Returns null if the string is not 'true' or 'false' (case-insensitive).
-	 */
-	private static tryParseBoolean(value: string): boolean | null {
-		const lower = value.toLowerCase().trim();
-		if (lower === "true") return true;
-		if (lower === "false") return false;
-		return null;
-	}
-
-	/**
-	 * Try to parse a string as a Date.
-	 * Returns null if the string is not a valid date.
-	 * Uses JavaScript's Date.parse() for recognition.
-	 */
-	private static tryParseDate(value: string): Date | null {
-		// Don't parse empty strings or pure numbers
-		if (value.trim() === "" || /^-?\d+(\.\d+)?$/.test(value)) return null;
-
-		// Try to parse as date
-		const timestamp = Date.parse(value);
-		if (!Number.isNaN(timestamp)) {
-			return new Date(timestamp);
-		}
-
-		return null;
 	}
 
 	private static detectForcedArrayFields(records: ConvertibleCsvRecord[], arraySuffix: string): Set<string> {

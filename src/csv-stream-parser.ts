@@ -1,4 +1,5 @@
 import { Transform, type TransformCallback, type TransformOptions } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 
 import { CsvDuplicateHeaderError, CsvParseError } from "./errors";
 import {
@@ -11,6 +12,7 @@ import {
 } from "./internal-empty-cell";
 import { NestedJsonConverter } from "./nested-json-converter";
 import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, NestedObject, ProgressCallback } from "./types";
+import { applyNullRepresentation, tryParseBoolean, tryParseNumber } from "./value-parsers";
 
 /**
  * Options for the streaming CSV parser.
@@ -112,6 +114,7 @@ export interface CsvStreamParserOptions extends CsvParserOptions, TransformOptio
  */
 export class CsvStreamParser extends Transform {
 	private buffer = "";
+	private decoder: StringDecoder;
 	private headers: string[] = [];
 	private headersProcessed = false;
 	private rowsSkipped = 0;
@@ -168,6 +171,9 @@ export class CsvStreamParser extends Transform {
 		this.quote = options.quote || '"';
 		this.skipRows = options.skipRows || 0;
 		this.stripBom = options.stripBom !== false;
+		// Decode incoming Buffer chunks with a stateful decoder so that multibyte
+		// characters split across chunk boundaries are reassembled correctly.
+		this.decoder = new StringDecoder(options.encoding || "utf-8");
 		// Initialize null values set
 		this.nullSet = new Set((options.nullValues ?? ["null", "NULL", "nil", "NIL"]).map(v => v.toLowerCase()));
 		// Initialize duplicate header handling
@@ -267,15 +273,19 @@ export class CsvStreamParser extends Transform {
 		}
 
 		try {
-			let data = typeof chunk === "string" ? chunk : chunk.toString(this.options.encoding || "utf-8");
+			// Track bytes processed based on the raw input, before decoding.
+			this.bytesProcessed += Buffer.isBuffer(chunk)
+				? chunk.length
+				: Buffer.byteLength(chunk, this.options.encoding || "utf-8");
+
+			// Decode through the stateful decoder so multibyte characters spanning
+			// chunk boundaries are not corrupted.
+			let data = Buffer.isBuffer(chunk) ? this.decoder.write(chunk) : chunk;
 
 			// Track start time on first chunk
 			if (this.startTime === 0) {
 				this.startTime = Date.now();
 			}
-
-			// Track bytes processed
-			this.bytesProcessed += Buffer.byteLength(data, "utf-8");
 
 			// Strip BOM from the first chunk if enabled
 			if (this.stripBom && !this.bomStripped) {
@@ -297,6 +307,13 @@ export class CsvStreamParser extends Transform {
 	 */
 	_flush(callback: TransformCallback): void {
 		try {
+			// Drain any bytes still held by the decoder (incomplete trailing sequence).
+			const remaining = this.decoder.end();
+			if (remaining) {
+				this.buffer += remaining;
+				this.processBuffer();
+			}
+
 			// Process any remaining data in the buffer
 			if (this.buffer.trim() && !this.limitReached) {
 				this.processLine(this.buffer);
@@ -731,13 +748,12 @@ export class CsvStreamParser extends Transform {
 			autoParseNumbers,
 			preserveUnsafeIntegersAsString,
 			autoParseBooleans,
-			autoParseDates,
 			valueTransformer,
 			nullValues,
 			nullRepresentation,
 		} = this.options;
 
-		if (!autoParseNumbers && !autoParseBooleans && !autoParseDates && !valueTransformer && nullValues === undefined) {
+		if (!autoParseNumbers && !autoParseBooleans && !valueTransformer && nullValues === undefined) {
 			return record;
 		}
 
@@ -749,7 +765,7 @@ export class CsvStreamParser extends Transform {
 
 			if (isQuotedEmptyCell(value)) {
 				if (nullValues !== undefined && this.nullSet.has("")) {
-					transformedValue = this.applyNullRepresentation(nullRepresentation);
+					transformedValue = applyNullRepresentation(nullRepresentation);
 					if (nullRepresentation === "omit") {
 						continue;
 					}
@@ -763,7 +779,7 @@ export class CsvStreamParser extends Transform {
 			if (value === "") {
 				// Check if empty string is in nullValues
 				if (nullValues !== undefined && this.nullSet.has("")) {
-					transformedValue = this.applyNullRepresentation(nullRepresentation);
+					transformedValue = applyNullRepresentation(nullRepresentation);
 					if (nullRepresentation === "omit") {
 						continue; // Skip this field
 					}
@@ -774,7 +790,7 @@ export class CsvStreamParser extends Transform {
 
 			// Step 0: Check for null values
 			if (nullValues !== undefined && this.nullSet.has(value.toLowerCase())) {
-				const nullVal = this.applyNullRepresentation(nullRepresentation);
+				const nullVal = applyNullRepresentation(nullRepresentation);
 				if (nullRepresentation === "omit") {
 					continue; // Skip this field
 				}
@@ -784,7 +800,7 @@ export class CsvStreamParser extends Transform {
 
 			// Auto-parse numbers
 			if (autoParseNumbers) {
-				const parsed = this.tryParseNumber(value, preserveUnsafeIntegersAsString);
+				const parsed = tryParseNumber(value, preserveUnsafeIntegersAsString);
 				if (parsed !== null) {
 					transformedValue = parsed;
 				}
@@ -792,15 +808,7 @@ export class CsvStreamParser extends Transform {
 
 			// Auto-parse booleans
 			if (autoParseBooleans && typeof transformedValue === "string") {
-				const parsed = this.tryParseBoolean(value);
-				if (parsed !== null) {
-					transformedValue = parsed;
-				}
-			}
-
-			// Auto-parse dates
-			if (autoParseDates && typeof transformedValue === "string") {
-				const parsed = this.tryParseDate(value);
+				const parsed = tryParseBoolean(value);
 				if (parsed !== null) {
 					transformedValue = parsed;
 				}
@@ -819,68 +827,6 @@ export class CsvStreamParser extends Transform {
 		}
 
 		return transformed;
-	}
-
-	/**
-	 * Apply null representation based on option.
-	 */
-	private applyNullRepresentation(
-		representation: CsvStreamParserOptions["nullRepresentation"]
-	): null | undefined | string {
-		switch (representation) {
-			case "null":
-				return null;
-			case "undefined":
-				return undefined;
-			case "empty-string":
-				return "";
-			default:
-				return undefined;
-		}
-	}
-
-	/**
-	 * Try to parse a string as a number.
-	 */
-	private tryParseNumber(value: string, preserveUnsafeIntegersAsString?: boolean): number | string | null {
-		if (value.trim() === "") return null;
-		if (/^0\d+$/.test(value)) return null;
-
-		const parsed = Number(value);
-		if (!Number.isNaN(parsed) && Number.isFinite(parsed)) {
-			if (preserveUnsafeIntegersAsString && /^-?\d+$/.test(value) && !Number.isSafeInteger(parsed)) {
-				return value;
-			}
-			return parsed;
-		}
-		return null;
-	}
-
-	/**
-	 * Try to parse a string as a boolean.
-	 */
-	private tryParseBoolean(value: string): boolean | null {
-		const lower = value.toLowerCase().trim();
-		if (lower === "true") return true;
-		if (lower === "false") return false;
-		return null;
-	}
-
-	/**
-	 * Try to parse a string as a Date.
-	 * Uses JavaScript's Date.parse() for recognition.
-	 */
-	private tryParseDate(value: string): Date | null {
-		// Don't parse empty strings or pure numbers
-		if (value.trim() === "" || /^-?\d+(\.\d+)?$/.test(value)) return null;
-
-		// Try to parse as date
-		const timestamp = Date.parse(value);
-		if (!Number.isNaN(timestamp)) {
-			return new Date(timestamp);
-		}
-
-		return null;
 	}
 
 	/**
