@@ -297,6 +297,35 @@ export interface CsvParserOptions {
 	skipRows?: number;
 
 	/**
+	 * Skip lines whose raw text starts with this prefix (checked at the beginning of each line,
+	 * before quoting is considered). Comment lines are removed entirely — they are not treated as
+	 * the header or as data rows.
+	 *
+	 * @remarks
+	 * Because comment lines are removed from the input, error line numbers reference the position
+	 * among the remaining (non-comment) lines.
+	 *
+	 * @example
+	 * ```typescript
+	 * CsvParser.parseString(csv, { commentPrefix: '#' });
+	 * ```
+	 */
+	commentPrefix?: string;
+
+	/**
+	 * Trim leading/trailing whitespace from unquoted field values (and headers). Whitespace inside
+	 * quoted fields is always preserved.
+	 * @default false
+	 *
+	 * @example
+	 * ```typescript
+	 * // 'a, b , c' -> ['a', 'b', 'c']
+	 * CsvParser.parseString(csv, { trimValues: true });
+	 * ```
+	 */
+	trimValues?: boolean;
+
+	/**
 	 * Automatically strip BOM (Byte Order Mark) from the beginning of content.
 	 * Handles UTF-8 BOM (\uFEFF) and UTF-16 BOMs.
 	 * @default true

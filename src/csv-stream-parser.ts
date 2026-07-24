@@ -1,18 +1,24 @@
 import { Transform, type TransformCallback, type TransformOptions } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 
-import { CsvDuplicateHeaderError, CsvParseError } from "./errors";
+import { CsvDuplicateHeaderError, CsvEncodingError, CsvParseError, CsvValidationError } from "./errors";
 import {
 	type InternalCsvCellValue,
 	type InternalCsvRecord,
 	isEmptyCsvCellValue,
-	isQuotedEmptyCell,
 	QUOTED_EMPTY_CELL,
 	toPublicCsvCellValue,
 } from "./internal-empty-cell";
 import { NestedJsonConverter } from "./nested-json-converter";
+import { assertDelimiterAndQuote } from "./option-validation";
+import {
+	needsValueTransformation,
+	resolveNullSet,
+	type TransformedRecord,
+	transformRecordValues,
+	unflattenRecord,
+} from "./record-transform";
 import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, NestedObject, ProgressCallback } from "./types";
-import { applyNullRepresentation, tryParseBoolean, tryParseNumber } from "./value-parsers";
 
 /**
  * Options for the streaming CSV parser.
@@ -119,6 +125,7 @@ export class CsvStreamParser extends Transform {
 	private headersProcessed = false;
 	private rowsSkipped = 0;
 	private dataRowIndex = 0;
+	private physicalLineNumber = 0;
 	private options: CsvStreamParserOptions;
 	private delimiter: string;
 	private quote: string;
@@ -164,18 +171,39 @@ export class CsvStreamParser extends Transform {
 	 * });
 	 * ```
 	 */
+	/**
+	 * Validate the configured encoding and produce the options passed to the Transform base class.
+	 * `encoding` is stripped because we decode chunks ourselves; leaving it in would make Readable
+	 * throw a generic TypeError for an unknown value instead of our {@link CsvEncodingError}.
+	 *
+	 * @throws {CsvEncodingError} If the encoding is not a recognized Node.js buffer encoding.
+	 */
+	private static toTransformOptions(options: CsvStreamParserOptions): TransformOptions {
+		const encoding = options.encoding || "utf-8";
+		if (!Buffer.isEncoding(encoding)) {
+			throw new CsvEncodingError(`Unsupported encoding: '${String(encoding)}'.`, encoding);
+		}
+
+		const { encoding: _ignored, ...rest } = options;
+		return { ...rest, objectMode: true };
+	}
+
 	constructor(options: CsvStreamParserOptions = {}) {
-		super({ ...options, objectMode: true });
+		// Validate the encoding and strip it from the Transform options before calling super:
+		// Readable's own `encoding` option would otherwise throw a generic TypeError for an unknown
+		// value. Chunk decoding is handled below by our own StringDecoder.
+		super(CsvStreamParser.toTransformOptions(options));
 		this.options = options;
 		this.delimiter = options.delimiter || ",";
 		this.quote = options.quote || '"';
+		assertDelimiterAndQuote(this.delimiter, this.quote);
 		this.skipRows = options.skipRows || 0;
 		this.stripBom = options.stripBom !== false;
 		// Decode incoming Buffer chunks with a stateful decoder so that multibyte
 		// characters split across chunk boundaries are reassembled correctly.
 		this.decoder = new StringDecoder(options.encoding || "utf-8");
 		// Initialize null values set
-		this.nullSet = new Set((options.nullValues ?? ["null", "NULL", "nil", "NIL"]).map(v => v.toLowerCase()));
+		this.nullSet = resolveNullSet(options);
 		// Initialize duplicate header handling
 		this.duplicateStrategy = options.duplicateHeaders ?? "error";
 		// Initialize progress tracking
@@ -377,29 +405,70 @@ export class CsvStreamParser extends Transform {
 	 * Process the buffer and extract complete lines.
 	 */
 	private processBuffer(): void {
+		const commentPrefix = this.options.commentPrefix;
+		const hasComments = commentPrefix !== undefined && commentPrefix !== "";
 		let insideQuotes = false;
+		// Track field boundaries so a quote is treated as special only at the start of a field
+		// (RFC 4180). This keeps a literal mid-field quote from suppressing newline splitting.
+		let atFieldStart = true;
+		let fieldWasQuoted = false;
 		let lineStart = 0;
 
 		for (let i = 0; i < this.buffer.length; i++) {
+			// Skip a complete comment line at line start without tokenizing it, so a stray quote in a
+			// comment cannot swallow the following line.
+			if (hasComments && i === lineStart && !insideQuotes && this.buffer.startsWith(commentPrefix, i)) {
+				let j = i;
+				while (j < this.buffer.length && this.buffer[j] !== "\n" && this.buffer[j] !== "\r") j++;
+				if (j >= this.buffer.length) {
+					// No terminator yet — leave the (possibly partial) comment line buffered.
+					break;
+				}
+				if (this.buffer[j] === "\r" && this.buffer[j + 1] === "\n") j++;
+				i = j;
+				lineStart = i + 1;
+				atFieldStart = true;
+				fieldWasQuoted = false;
+				continue;
+			}
+
 			const char = this.buffer[i];
 			const nextChar = i + 1 < this.buffer.length ? this.buffer[i + 1] : "";
 
 			if (char === this.quote) {
-				insideQuotes = !insideQuotes;
-			} else if (!insideQuotes) {
-				// Check for line endings
+				if (insideQuotes) {
+					if (nextChar === this.quote) {
+						i++; // Escaped quote stays inside the quoted field
+					} else {
+						insideQuotes = false; // Closing quote
+					}
+				} else if (atFieldStart && !fieldWasQuoted) {
+					insideQuotes = true; // Opening quote at field start
+					fieldWasQuoted = true;
+				}
+				// A quote anywhere else is a literal character.
+				atFieldStart = false;
+			} else if (!insideQuotes && char === this.delimiter) {
+				// New field begins after a delimiter.
+				atFieldStart = true;
+				fieldWasQuoted = false;
+			} else if (!insideQuotes && (char === "\r" || char === "\n")) {
+				// Line ending
 				if (char === "\r" && nextChar === "\n") {
-					// CRLF
 					const line = this.buffer.slice(lineStart, i);
 					this.processLine(line);
 					i++; // Skip the \n
 					lineStart = i + 1;
-				} else if (char === "\n" || char === "\r") {
-					// LF or CR
+				} else {
 					const line = this.buffer.slice(lineStart, i);
 					this.processLine(line);
 					lineStart = i + 1;
 				}
+				// A new line starts a new record and a new first field.
+				atFieldStart = true;
+				fieldWasQuoted = false;
+			} else {
+				atFieldStart = false;
 			}
 		}
 
@@ -415,6 +484,16 @@ export class CsvStreamParser extends Transform {
 		if (this.limitReached) {
 			return;
 		}
+
+		// Comment lines are removed entirely (not header, not data) and are not counted.
+		const commentPrefix = this.options.commentPrefix;
+		if (commentPrefix !== undefined && commentPrefix !== "" && line.startsWith(commentPrefix)) {
+			return;
+		}
+
+		// Count every physical line (blank/skipped/header/data) so validation error messages report
+		// the same 1-based source line number as the buffered parser.
+		this.physicalLineNumber++;
 
 		// Skip empty lines
 		if (line.trim() === "") {
@@ -462,6 +541,26 @@ export class CsvStreamParser extends Transform {
 		}
 
 		const values = this.parseLine(line, true);
+
+		// Validate column count (parity with the buffered parser). Extra values are ignored;
+		// how that is surfaced depends on validationMode.
+		const validationMode = this.options.validationMode || "warn";
+		if (values.length > this.headers.length && validationMode !== "ignore") {
+			const message = `Row ${this.physicalLineNumber} has ${values.length} values but only ${this.headers.length} columns defined. Extra values will be ignored.`;
+
+			if (validationMode === "error") {
+				throw new CsvValidationError(message, this.physicalLineNumber, this.headers.length, values.length);
+			}
+			if (validationMode === "warn") {
+				console.warn(`Warning: ${message}`);
+			}
+		}
+
+		// Too-few-columns is only enforced in strict 'error' mode (parity with the buffered parser).
+		if (values.length < this.headers.length && validationMode === "error") {
+			const message = `Row ${this.physicalLineNumber} has ${values.length} values but ${this.headers.length} columns are defined.`;
+			throw new CsvValidationError(message, this.physicalLineNumber, this.headers.length, values.length);
+		}
 
 		// Create record from values
 		const record = this.createRecord(values);
@@ -636,10 +735,13 @@ export class CsvStreamParser extends Transform {
 	private parseLine(line: string, preserveQuotedEmpty: false): string[];
 	private parseLine(line: string, preserveQuotedEmpty: true): InternalCsvCellValue[];
 	private parseLine(line: string, preserveQuotedEmpty: boolean): InternalCsvCellValue[] {
+		const trimValues = this.options.trimValues === true;
+
 		// Fast path: a line with no quote character has no quoted fields, so a native split is
 		// exact (no field was quoted, so finalizeParsedCellValue would be a no-op anyway).
 		if (line.indexOf(this.quote) === -1) {
-			return line.split(this.delimiter);
+			const cells = line.split(this.delimiter);
+			return trimValues ? cells.map(cell => cell.trim()) : cells;
 		}
 
 		const values: InternalCsvCellValue[] = [];
@@ -652,16 +754,25 @@ export class CsvStreamParser extends Transform {
 			const nextChar = i + 1 < line.length ? line[i + 1] : "";
 
 			if (char === this.quote) {
-				if (insideQuotes && nextChar === this.quote) {
-					// Escaped quote
-					currentValue += this.quote;
-					i++;
-				} else {
-					insideQuotes = !insideQuotes;
+				if (insideQuotes) {
+					if (nextChar === this.quote) {
+						// Escaped quote inside a quoted field
+						currentValue += this.quote;
+						i++;
+					} else {
+						// Closing quote
+						insideQuotes = false;
+					}
+				} else if (currentValue === "" && !fieldWasQuoted) {
+					// Opening quote (only special at the start of a field, per RFC 4180)
+					insideQuotes = true;
 					fieldWasQuoted = true;
+				} else {
+					// A quote in the middle of an unquoted field is a literal character
+					currentValue += this.quote;
 				}
 			} else if (char === this.delimiter && !insideQuotes) {
-				values.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
+				values.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty, trimValues));
 				currentValue = "";
 				fieldWasQuoted = false;
 			} else {
@@ -669,15 +780,21 @@ export class CsvStreamParser extends Transform {
 			}
 		}
 
-		values.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
+		values.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty, trimValues));
 		return values;
 	}
 
 	private finalizeParsedCellValue(
 		value: string,
 		fieldWasQuoted: boolean,
-		preserveQuotedEmpty: boolean
+		preserveQuotedEmpty: boolean,
+		trimValues = false
 	): InternalCsvCellValue {
+		// Trim only unquoted fields so quoted whitespace is preserved verbatim.
+		if (trimValues && !fieldWasQuoted) {
+			value = value.trim();
+		}
+
 		if (preserveQuotedEmpty && fieldWasQuoted && value === "") {
 			return QUOTED_EMPTY_CELL;
 		}
@@ -746,144 +863,23 @@ export class CsvStreamParser extends Transform {
 
 	/**
 	 * Apply value transformations to a record.
+	 *
+	 * Delegates to the shared {@link transformRecordValues} so the buffered and streaming paths
+	 * stay in lockstep.
 	 */
-	private applyTransformations(
-		record: InternalCsvRecord
-	): Record<string, string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL> {
-		const {
-			autoParseNumbers,
-			preserveUnsafeIntegersAsString,
-			autoParseBooleans,
-			valueTransformer,
-			nullValues,
-			nullRepresentation,
-		} = this.options;
-
-		if (!autoParseNumbers && !autoParseBooleans && !valueTransformer && nullValues === undefined) {
+	private applyTransformations(record: InternalCsvRecord): TransformedRecord {
+		if (!needsValueTransformation(this.options)) {
 			return record;
 		}
 
-		const transformed: Record<string, string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL> =
-			{};
-
-		for (const [header, value] of Object.entries(record)) {
-			let transformedValue: string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL = value;
-
-			if (isQuotedEmptyCell(value)) {
-				if (nullValues !== undefined && this.nullSet.has("")) {
-					transformedValue = applyNullRepresentation(nullRepresentation);
-					if (nullRepresentation === "omit") {
-						continue;
-					}
-				}
-
-				transformed[header] = transformedValue;
-				continue;
-			}
-
-			// Handle empty values
-			if (value === "") {
-				// Check if empty string is in nullValues
-				if (nullValues !== undefined && this.nullSet.has("")) {
-					transformedValue = applyNullRepresentation(nullRepresentation);
-					if (nullRepresentation === "omit") {
-						continue; // Skip this field
-					}
-				}
-				transformed[header] = transformedValue;
-				continue;
-			}
-
-			// Step 0: Check for null values
-			if (nullValues !== undefined && this.nullSet.has(value.toLowerCase())) {
-				const nullVal = applyNullRepresentation(nullRepresentation);
-				if (nullRepresentation === "omit") {
-					continue; // Skip this field
-				}
-				transformed[header] = nullVal;
-				continue;
-			}
-
-			// Auto-parse numbers
-			if (autoParseNumbers) {
-				const parsed = tryParseNumber(value, preserveUnsafeIntegersAsString);
-				if (parsed !== null) {
-					transformedValue = parsed;
-				}
-			}
-
-			// Auto-parse booleans
-			if (autoParseBooleans && typeof transformedValue === "string") {
-				const parsed = tryParseBoolean(value);
-				if (parsed !== null) {
-					transformedValue = parsed;
-				}
-			}
-
-			// Custom transformer
-			if (valueTransformer) {
-				transformedValue = valueTransformer(transformedValue as string | number | boolean, header) as
-					| string
-					| number
-					| boolean
-					| Date;
-			}
-
-			transformed[header] = transformedValue;
-		}
-
-		return transformed;
+		return transformRecordValues(record, this.options, this.nullSet);
 	}
 
 	/**
 	 * Unflatten a record with dot-notation keys into a nested object.
 	 */
-	private unflatten(
-		record: Record<string, string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL>
-	): NestedObject {
-		const result: NestedObject = {};
-		const preserveEmptyColumns = this.options.preserveEmptyColumnAsEmptyString === true;
-		const preserveEmptyStrings = this.options.preserveEmptyString !== false;
-		const arraySuffix = this.options.arraySuffixIndicator ?? "[]";
-
-		for (const [key, value] of Object.entries(record)) {
-			if (value === undefined) continue;
-
-			let normalizedValue: string | number | boolean | Date | null;
-
-			if (isQuotedEmptyCell(value)) {
-				if (!preserveEmptyStrings) continue;
-				normalizedValue = "";
-			} else if (value === "") {
-				if (!preserveEmptyColumns) continue;
-				normalizedValue = "";
-			} else {
-				normalizedValue = value;
-			}
-
-			// Split once and strip the array suffix from each segment in the same pass,
-			// instead of splitting, rejoining, and splitting again.
-			const parts = key.split(".");
-			for (let p = 0; p < parts.length; p++) {
-				if (parts[p].endsWith(arraySuffix)) {
-					parts[p] = parts[p].slice(0, -arraySuffix.length);
-				}
-			}
-
-			let current: NestedObject = result;
-
-			for (let i = 0; i < parts.length - 1; i++) {
-				const part = parts[i];
-				if (!current[part]) {
-					current[part] = {};
-				}
-				current = current[part] as NestedObject;
-			}
-
-			current[parts[parts.length - 1]] = normalizedValue;
-		}
-
-		return result;
+	private unflatten(record: TransformedRecord): NestedObject {
+		return unflattenRecord(record, this.options);
 	}
 
 	/**

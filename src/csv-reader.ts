@@ -6,6 +6,7 @@ import {
 	QUOTED_EMPTY_CELL,
 	toPublicCsvCellValue,
 } from "./internal-empty-cell";
+import { assertDelimiterAndQuote } from "./option-validation";
 import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, ValidationMode } from "./types";
 
 /**
@@ -73,11 +74,14 @@ export class CsvReader {
 		const validationMode = options.validationMode || "warn";
 		const delimiter = options.delimiter || ",";
 		const quote = options.quote || '"';
+		assertDelimiterAndQuote(delimiter, quote);
 		const skipRows = options.skipRows || 0;
+		const commentPrefix = options.commentPrefix;
+		const trimValues = options.trimValues === true;
 
 		// Single-pass tokenize: split into rows of cells in one scan, instead of building an
 		// intermediate array of line strings (splitLines) and then re-scanning each line (parseLine).
-		const rows = this.tokenize(processedContent, delimiter, quote, preserveQuotedEmpty);
+		const rows = this.tokenize(processedContent, delimiter, quote, preserveQuotedEmpty, commentPrefix, trimValues);
 
 		if (rows.length === 0) return [];
 
@@ -138,6 +142,14 @@ export class CsvReader {
 				}
 			}
 
+			// Too-few-columns is only enforced in strict 'error' mode. Missing trailing cells are
+			// commonly intentional (padded with empty), so 'warn'/'ignore' stay lenient.
+			if (values.length < headers.length && validationMode === "error") {
+				const lineNumber = i + 1;
+				const message = `Row ${lineNumber} has ${values.length} values but ${headers.length} columns are defined.`;
+				throw new CsvValidationError(message, lineNumber, headers.length, values.length);
+			}
+
 			const record = this.createRecord(values, headers, includedIndices, duplicateIndices, dupStrategy, options);
 
 			// Apply row filter if specified
@@ -167,14 +179,26 @@ export class CsvReader {
 		content: string,
 		delimiter: string,
 		quote: string,
-		preserveQuotedEmpty: boolean
+		preserveQuotedEmpty: boolean,
+		commentPrefix?: string,
+		trimValues = false
 	): { cells: InternalCsvCellValue[]; blank: boolean }[] {
+		const hasComments = commentPrefix !== undefined && commentPrefix !== "";
+
 		// Fast path: without any quote character, no field can contain a delimiter or span a line
 		// boundary, so native splitting is exact and far faster than manual accumulation.
 		if (content.indexOf(quote) === -1) {
 			const lines = content.split(/\r\n|\n|\r/);
 			if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-			return lines.map(line => ({ cells: line.split(delimiter), blank: line.trim() === "" }));
+
+			const result: { cells: InternalCsvCellValue[]; blank: boolean }[] = [];
+			for (const line of lines) {
+				if (hasComments && line.startsWith(commentPrefix)) continue;
+				let lineCells: InternalCsvCellValue[] = line.split(delimiter);
+				if (trimValues) lineCells = (lineCells as string[]).map(cell => cell.trim());
+				result.push({ cells: lineCells, blank: line.trim() === "" });
+			}
+			return result;
 		}
 
 		const rows: { cells: InternalCsvCellValue[]; blank: boolean }[] = [];
@@ -185,25 +209,46 @@ export class CsvReader {
 		let lineStart = 0;
 
 		for (let i = 0; i < content.length; i++) {
+			// Skip a full comment line without tokenizing it. Checked only at the start of a line so
+			// the prefix must be the line's first character(s); this also prevents a stray quote in a
+			// comment from swallowing the following line.
+			if (hasComments && i === lineStart && !insideQuotes && content.startsWith(commentPrefix, i)) {
+				let j = i;
+				while (j < content.length && content[j] !== "\n" && content[j] !== "\r") j++;
+				if (content[j] === "\r" && content[j + 1] === "\n") j++; // Consume the \n of a CRLF pair
+				i = j;
+				lineStart = i + 1;
+				continue;
+			}
+
 			const char = content[i];
 
 			if (char === quote) {
-				if (insideQuotes && content[i + 1] === quote) {
-					// Escaped quote
-					currentValue += quote;
-					i++;
-				} else {
-					insideQuotes = !insideQuotes;
+				if (insideQuotes) {
+					if (content[i + 1] === quote) {
+						// Escaped quote inside a quoted field
+						currentValue += quote;
+						i++;
+					} else {
+						// Closing quote
+						insideQuotes = false;
+					}
+				} else if (currentValue === "" && !fieldWasQuoted) {
+					// Opening quote (only special at the start of a field, per RFC 4180)
+					insideQuotes = true;
 					fieldWasQuoted = true;
+				} else {
+					// A quote in the middle of an unquoted field is a literal character
+					currentValue += quote;
 				}
 			} else if (char === delimiter && !insideQuotes) {
-				cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
+				cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty, trimValues));
 				currentValue = "";
 				fieldWasQuoted = false;
 			} else if ((char === "\n" || char === "\r") && !insideQuotes) {
 				const lineEnd = i;
 				if (char === "\r" && content[i + 1] === "\n") i++; // Consume the \n of a CRLF pair
-				cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
+				cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty, trimValues));
 				rows.push({ cells, blank: content.slice(lineStart, lineEnd).trim() === "" });
 				cells = [];
 				currentValue = "";
@@ -216,7 +261,7 @@ export class CsvReader {
 
 		// Emit the final line only when the content did not end on a line terminator.
 		if (lineStart < content.length || cells.length > 0 || currentValue !== "") {
-			cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty));
+			cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty, trimValues));
 			rows.push({ cells, blank: content.slice(lineStart).trim() === "" });
 		}
 
@@ -412,14 +457,22 @@ export class CsvReader {
 			const nextChar = i + 1 < line.length ? line[i + 1] : "";
 
 			if (char === quote) {
-				if (insideQuotes && nextChar === quote) {
-					// Escaped quote
-					currentValue += quote;
-					i++; // Skip the next quote
-				} else {
-					// Toggle quote state
-					insideQuotes = !insideQuotes;
+				if (insideQuotes) {
+					if (nextChar === quote) {
+						// Escaped quote inside a quoted field
+						currentValue += quote;
+						i++; // Skip the next quote
+					} else {
+						// Closing quote
+						insideQuotes = false;
+					}
+				} else if (currentValue === "" && !fieldWasQuoted) {
+					// Opening quote (only special at the start of a field, per RFC 4180)
+					insideQuotes = true;
 					fieldWasQuoted = true;
+				} else {
+					// A quote in the middle of an unquoted field is a literal character
+					currentValue += quote;
 				}
 			} else if (char === delimiter && !insideQuotes) {
 				// Field delimiter
@@ -440,8 +493,14 @@ export class CsvReader {
 	private static finalizeParsedCellValue(
 		value: string,
 		fieldWasQuoted: boolean,
-		preserveQuotedEmpty: boolean
+		preserveQuotedEmpty: boolean,
+		trimValues = false
 	): InternalCsvCellValue {
+		// Trim only unquoted fields so quoted whitespace is preserved verbatim.
+		if (trimValues && !fieldWasQuoted) {
+			value = value.trim();
+		}
+
 		if (preserveQuotedEmpty && fieldWasQuoted && value === "") {
 			return QUOTED_EMPTY_CELL;
 		}

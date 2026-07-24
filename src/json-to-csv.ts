@@ -1,5 +1,6 @@
 import fs from "node:fs";
 
+import { assertDelimiterAndQuote } from "./option-validation";
 import type { CsvParserOptions, NestedObject, NestedValue } from "./types";
 
 /**
@@ -20,6 +21,22 @@ export interface JsonToCsvOptions extends Pick<
 	 * @default true
 	 */
 	includeHeader?: boolean;
+
+	/**
+	 * String used to represent an explicit `null` value in output, so it can be distinguished from
+	 * an empty cell (`undefined`/missing always becomes an empty string). Defaults to `''`, matching
+	 * the previous behavior where `null` and empty were indistinguishable.
+	 *
+	 * @default ''
+	 *
+	 * @example
+	 * ```typescript
+	 * JsonToCsv.stringify([{ id: '1', note: null }], { nullValue: '\\N' });
+	 * // id,note
+	 * // 1,\N
+	 * ```
+	 */
+	nullValue?: string;
 }
 
 /**
@@ -78,6 +95,7 @@ export class JsonToCsv {
 
 		const delimiter = options.delimiter || ",";
 		const quote = options.quote || '"';
+		assertDelimiterAndQuote(delimiter, quote);
 		const lineEnding = options.lineEnding || "\n";
 		const includeHeader = options.includeHeader !== false;
 		const arrayMode = options.arrayMode || "rows";
@@ -100,7 +118,7 @@ export class JsonToCsv {
 
 		// Add data rows
 		for (const obj of data) {
-			const flatRows = this.flattenObject(obj, headers, arrayMode, arraySuffix);
+			const flatRows = this.flattenObject(obj, headers, arrayMode, arraySuffix, options.nullValue ?? "");
 			for (const flatRow of flatRows) {
 				const values = headers.map(header => {
 					const value = flatRow[header];
@@ -148,6 +166,48 @@ export class JsonToCsv {
 		const csv = this.stringify(data, options);
 		const encoding = options.encoding || "utf-8";
 		await fs.promises.writeFile(filePath, csv, encoding);
+	}
+
+	/**
+	 * Resolve the header columns for a set of records, honoring `arrayMode`/`arraySuffixIndicator`.
+	 *
+	 * @internal Used by {@link JsonToCsvStream} to derive headers from the first record(s).
+	 */
+	static resolveHeaders(data: NestedObject[], options: JsonToCsvOptions = {}): string[] {
+		const arrayMode = options.arrayMode || "rows";
+		const arraySuffix = arrayMode === "rows" ? (options.arraySuffixIndicator ?? "[]") : "";
+		return this.collectHeaders(data, arraySuffix);
+	}
+
+	/**
+	 * Build the escaped header line for a fixed set of columns.
+	 *
+	 * @internal Used by {@link JsonToCsvStream}.
+	 */
+	static headerLine(headers: string[], options: JsonToCsvOptions = {}): string {
+		const delimiter = options.delimiter || ",";
+		const quote = options.quote || '"';
+		assertDelimiterAndQuote(delimiter, quote);
+		return headers.map(h => this.escapeValue(h, delimiter, quote)).join(delimiter);
+	}
+
+	/**
+	 * Build the CSV line(s) for a single object against a fixed set of headers. In `rows` array
+	 * mode an object may produce multiple continuation lines.
+	 *
+	 * @internal Used by {@link JsonToCsvStream}.
+	 */
+	static objectToCsvLines(obj: NestedObject, headers: string[], options: JsonToCsvOptions = {}): string[] {
+		const delimiter = options.delimiter || ",";
+		const quote = options.quote || '"';
+		assertDelimiterAndQuote(delimiter, quote);
+		const arrayMode = options.arrayMode || "rows";
+		const arraySuffix = arrayMode === "rows" ? (options.arraySuffixIndicator ?? "[]") : "";
+
+		const flatRows = this.flattenObject(obj, headers, arrayMode, arraySuffix, options.nullValue ?? "");
+		return flatRows.map(flatRow =>
+			headers.map(header => this.escapeValue(flatRow[header], delimiter, quote)).join(delimiter)
+		);
 	}
 
 	/**
@@ -237,7 +297,8 @@ export class JsonToCsv {
 		obj: NestedObject,
 		headers: string[],
 		arrayMode: "rows" | "json",
-		arraySuffix: string
+		arraySuffix: string,
+		nullValue = ""
 	): Record<string, string>[] {
 		// First, flatten the object to get all paths and values
 		const flatValues: Record<string, NestedValue> = {};
@@ -250,7 +311,7 @@ export class JsonToCsv {
 			const row: Record<string, string> = {};
 			for (const header of headers) {
 				if (header in flatValues) {
-					row[header] = this.valueToString(flatValues[header]);
+					row[header] = this.valueToString(flatValues[header], nullValue);
 				} else if (header in arrayValues) {
 					// JSON-stringify the array
 					row[header] = JSON.stringify(arrayValues[header]);
@@ -262,7 +323,7 @@ export class JsonToCsv {
 		}
 
 		// ArrayMode is 'rows' - generate continuation rows
-		return this.generateContinuationRows(headers, flatValues, arrayValues, arraySuffix);
+		return this.generateContinuationRows(headers, flatValues, arrayValues, arraySuffix, nullValue);
 	}
 
 	/**
@@ -298,7 +359,8 @@ export class JsonToCsv {
 		headers: string[],
 		flatValues: Record<string, NestedValue>,
 		arrayValues: Record<string, NestedValue[]>,
-		arraySuffix: string
+		arraySuffix: string,
+		nullValue = ""
 	): Record<string, string>[] {
 		const arrayPaths = Object.keys(arrayValues).sort((a, b) => b.length - a.length);
 
@@ -330,11 +392,11 @@ export class JsonToCsv {
 					if (i < arr.length) {
 						const item = arr[i];
 						if (header === arrayPath) {
-							row[header] = this.valueToString(item as NestedValue);
+							row[header] = this.valueToString(item as NestedValue, nullValue);
 						} else if (item && typeof item === "object" && !Array.isArray(item)) {
 							const relativePath = header.slice(arrayPath.length + 1);
 							const nestedValue = this.getNestedValueAtPath(item as NestedObject, relativePath, arraySuffix);
-							row[header] = nestedValue === undefined ? "" : this.valueToString(nestedValue);
+							row[header] = nestedValue === undefined ? "" : this.valueToString(nestedValue, nullValue);
 						} else {
 							row[header] = "";
 						}
@@ -343,7 +405,7 @@ export class JsonToCsv {
 					}
 				} else if (i === 0 && header in flatValues) {
 					// Non-array values only appear in first row
-					row[header] = this.valueToString(flatValues[header]);
+					row[header] = this.valueToString(flatValues[header], nullValue);
 				} else if (!(header in row)) {
 					row[header] = "";
 				}
@@ -393,9 +455,15 @@ export class JsonToCsv {
 
 	/**
 	 * Convert a value to string for CSV output.
+	 *
+	 * `nullValue` is emitted for an explicit `null` so it can be distinguished from an empty cell
+	 * on re-parse; `undefined` (a missing value) always becomes an empty string.
 	 */
-	private static valueToString(value: NestedValue): string {
-		if (value === null || value === undefined) {
+	private static valueToString(value: NestedValue, nullValue = ""): string {
+		if (value === null) {
+			return nullValue;
+		}
+		if (value === undefined) {
 			return "";
 		}
 		if (value instanceof Date) {

@@ -19,8 +19,8 @@ A powerful TypeScript CSV parser that transforms flat CSV data into nested JSON 
 - **Value Transformations** - Auto-parse numbers and booleans, or use custom transformers
 - **Header Transformations** - Transform and map column names
 - **Row Filtering** - Filter rows during parsing for memory efficiency
-- **RFC 4180 Compliant** - Handles quoted fields, escaped quotes, and various line endings
-- **Flexible Delimiters** - Support for comma, semicolon, tab, pipe, and custom delimiters
+- **RFC 4180 Aligned** - Handles quoted fields, escaped quotes, field-start quoting, and various line endings
+- **Flexible Delimiters** - Any single character: comma, semicolon, tab, pipe, and more
 - **Custom Encodings** - Handle different file encodings (UTF-8, Latin1, etc.)
 - **BOM Handling** - Automatic Byte Order Mark detection and removal
 - **TypeScript & JavaScript** - Full type definitions included
@@ -72,6 +72,7 @@ console.log(result);
 | `JsonToCsv.stringify()`         | Convert JSON objects to CSV string                              |
 | `JsonToCsv.writeFileSync()`     | Write JSON objects to CSV file (sync)                           |
 | `JsonToCsv.writeFile()`         | Write JSON objects to CSV file (async)                          |
+| `JsonToCsvStream`               | Streaming JSON-to-CSV writer for large arrays                   |
 
 ## 🔧 Basic Usage
 
@@ -1009,6 +1010,10 @@ Controls how the parser handles rows with more values than headers:
 - `'warn'` (default): Log a warning to console
 - `'error'`: Throw a `CsvValidationError`
 
+In `'error'` mode, rows with **fewer** values than headers also throw (strict validation). In
+`'warn'`/`'ignore'` mode, short rows stay lenient and missing trailing cells are padded with empty
+values. `CsvStreamParser` applies the same validation behavior as the buffered `CsvParser`.
+
 #### `delimiter`
 
 Field delimiter character. Common values:
@@ -1041,6 +1046,26 @@ Number of rows to skip before the header row. Useful for files with metadata at 
 #### `stripBom`
 
 Automatically remove BOM (Byte Order Mark) from the beginning of content. Default: `true`
+
+#### `commentPrefix`
+
+Skip lines whose raw text starts with this prefix (checked at the start of each line). Comment lines
+are removed entirely — they are neither the header nor data rows. Because they are removed, error line
+numbers reference the position among the remaining (non-comment) lines.
+
+```typescript
+CsvParser.parseString(csv, { commentPrefix: "#" });
+```
+
+#### `trimValues`
+
+Trim leading/trailing whitespace from **unquoted** field values (and headers). Whitespace inside
+quoted fields is always preserved. Default: `false`
+
+```typescript
+// 'a, b , c' -> ['a', 'b', 'c']; '"  x  "' stays '  x  '
+CsvParser.parseString(csv, { trimValues: true });
+```
 
 #### `autoParseNumbers`
 
@@ -1347,12 +1372,43 @@ const csv = JsonToCsv.stringify(data, {
 	quote: '"',
 	arrayMode: "rows", // 'rows' (continuation rows) or 'json' (stringify arrays)
 	arraySuffixIndicator: "[]", // suffix added to array headers in 'rows' mode (default '[]')
+	lineEnding: "\n", // '\n' (default) or '\r\n'
+	includeHeader: true, // emit a header row (default true)
+	nullValue: "", // string used for an explicit null (default ''), distinct from a missing cell
 });
 ```
 
 In `'rows'` mode, array columns are emitted with the `arraySuffixIndicator` suffix (for example
 `tags[]`, `phones[].type`) so the output re-parses back into arrays. In `'json'` mode the suffix is
 not used because each array is written to a single cell.
+
+**`JsonToCsvOptions`:**
+
+- `delimiter` / `quote` — single characters (default `,` and `"`).
+- `lineEnding` — `'\n'` (default) or `'\r\n'`.
+- `includeHeader` — whether to emit a header row (default `true`).
+- `arrayMode` — `'rows'` (default) or `'json'`.
+- `arraySuffixIndicator` — suffix for array headers in `'rows'` mode (default `'[]'`).
+- `nullValue` — string emitted for an explicit `null` so it can be distinguished from an empty cell
+  on re-parse (default `''`). A missing/`undefined` value always becomes an empty string.
+
+**Known limitation:** an empty nested object (`{ a: {} }`) produces no column and is dropped, because
+there is no leaf value to place under a header.
+
+#### Streaming JSON to CSV
+
+For large arrays, `JsonToCsvStream` (a `Transform`) writes CSV incrementally instead of building the
+whole string in memory. Headers are fixed up front — from an explicit `columns` option, or derived
+from the **first** object written (keys on later objects that are not in the header set are dropped).
+
+```typescript
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
+import { createWriteStream } from "node:fs";
+import { JsonToCsvStream } from "@cerios/csv-nested-json";
+
+await pipeline(Readable.from(records), new JsonToCsvStream({ delimiter: ";" }), createWriteStream("out.csv"));
+```
 
 ### Error Classes
 
@@ -1525,18 +1581,25 @@ const result = CsvParser.parseFileSync("data.csv");
 
 ## 📋 CSV Format Support
 
-The library is fully RFC 4180 compliant and supports:
+The library follows RFC 4180 and supports:
 
 - ✅ **Quoted Fields with Commas:** `"value, with, commas"`
 - ✅ **Quoted Fields with Newlines:** Multi-line values within quotes
 - ✅ **Escaped Quotes:** `"He said ""Hello"""` → `He said "Hello"`
+- ✅ **Quotes only special at field start:** a quote in the middle of an unquoted field
+  (e.g. `foo"bar`) is treated as a literal character, per RFC 4180
 - ✅ **Various Line Endings:** Windows (CRLF), Unix (LF), Mac (CR)
 - ✅ **BOM Handling:** UTF-8 and UTF-16 BOM automatically stripped
 - ✅ **Empty Lines:** Automatically skipped
+- ✅ **Comment Lines:** Optional, via `commentPrefix`
+- ✅ **Whitespace Trimming:** Optional, via `trimValues` (quoted whitespace preserved)
 - ✅ **Flexible Column Counts:** Continuation rows can have different column counts
-- ✅ **Custom Delimiters:** Comma, semicolon, tab, pipe, or any character
-- ✅ **Custom Quote Characters:** Double quotes, single quotes, or any character
+- ✅ **Custom Delimiters:** Comma, semicolon, tab, pipe, or any **single** character
+- ✅ **Custom Quote Characters:** Double quotes, single quotes, or any **single** character
 - ✅ **Multiple Encodings:** UTF-8, Latin1, UTF-16, and more
+
+> **Note:** `delimiter` and `quote` must each be a single character (and different from each other);
+> a multi-character value throws `CsvParseError`.
 
 ### Quoted Fields Examples
 
@@ -1598,7 +1661,7 @@ type ArrayMode = "rows" | "json";
 type DuplicateHeaderStrategy = "error" | "rename" | "combine" | "first" | "last";
 
 // Function types
-type ValueTransformer = (value: unknown, header: string) => unknown;
+type ValueTransformer = (value: string | number | boolean, header: string) => unknown;
 type HeaderTransformer = (header: string) => string;
 type RowFilter = (record: CsvRecord, rowIndex: number) => boolean;
 type ProgressCallback = (info: ProgressInfo) => void | Promise<void>;

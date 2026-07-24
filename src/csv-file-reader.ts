@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { Readable } from "node:stream";
 
-import { CsvFileNotFoundError } from "./errors";
+import { CsvEncodingError, CsvFileNotFoundError } from "./errors";
 import type { CsvParserOptions } from "./types";
 
 /**
@@ -36,11 +36,12 @@ export class CsvFileReader {
 	 * ```
 	 */
 	static readFileSync(filePath: string, options: CsvParserOptions = {}): string {
+		const encoding = this.resolveEncoding(options);
+
 		if (!fs.existsSync(filePath)) {
 			throw new CsvFileNotFoundError(filePath);
 		}
 
-		const encoding = options.encoding || "utf-8";
 		return fs.readFileSync(filePath, encoding);
 	}
 
@@ -58,11 +59,12 @@ export class CsvFileReader {
 	 * ```
 	 */
 	static async readFile(filePath: string, options: CsvParserOptions = {}): Promise<string> {
+		const encoding = this.resolveEncoding(options);
+
 		if (!fs.existsSync(filePath)) {
 			throw new CsvFileNotFoundError(filePath);
 		}
 
-		const encoding = options.encoding || "utf-8";
 		return await fs.promises.readFile(filePath, encoding);
 	}
 
@@ -80,6 +82,8 @@ export class CsvFileReader {
 	 * ```
 	 */
 	static async readStream(stream: Readable, options: CsvParserOptions = {}): Promise<string> {
+		const encoding = this.resolveEncoding(options);
+
 		return new Promise((resolve, reject) => {
 			const chunks: Buffer[] = [];
 
@@ -89,10 +93,10 @@ export class CsvFileReader {
 
 			stream.on("end", () => {
 				try {
-					const content = Buffer.concat(chunks).toString(options.encoding || "utf-8");
+					const content = Buffer.concat(chunks).toString(encoding);
 					resolve(content);
-				} catch (error) {
-					reject(error);
+				} catch {
+					reject(new CsvEncodingError(`Failed to decode stream content as '${String(encoding)}'.`, encoding));
 				}
 			});
 
@@ -100,5 +104,18 @@ export class CsvFileReader {
 				reject(error);
 			});
 		});
+	}
+
+	/**
+	 * Resolve and validate the configured encoding.
+	 *
+	 * @throws {CsvEncodingError} If the encoding is not a recognized Node.js buffer encoding.
+	 */
+	private static resolveEncoding(options: CsvParserOptions): BufferEncoding {
+		const encoding = options.encoding || "utf-8";
+		if (!Buffer.isEncoding(encoding)) {
+			throw new CsvEncodingError(`Unsupported encoding: '${String(encoding)}'.`, encoding);
+		}
+		return encoding;
 	}
 }

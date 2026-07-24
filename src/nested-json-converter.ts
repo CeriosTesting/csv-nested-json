@@ -1,5 +1,13 @@
 import { CsvParseError } from "./errors";
-import { type InternalCsvRecord, isQuotedEmptyCell, QUOTED_EMPTY_CELL } from "./internal-empty-cell";
+import { type InternalCsvRecord, isQuotedEmptyCell } from "./internal-empty-cell";
+import {
+	needsValueTransformation,
+	resolveNullSet,
+	type TransformedRecord,
+	type TransformedRecordValue,
+	transformRecordValues,
+	unflattenRecord,
+} from "./record-transform";
 import type {
 	CsvParserOptions,
 	CsvRecord,
@@ -9,11 +17,8 @@ import type {
 	NestedValue,
 	RowContext,
 } from "./types";
-import { applyNullRepresentation, tryParseBoolean, tryParseNumber } from "./value-parsers";
 
 type ConvertibleCsvRecord = CsvRecord | InternalCsvRecord;
-type TransformedRecordValue = string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL;
-type TransformedRecord = Record<string, TransformedRecordValue>;
 
 /**
  * Nested JSON conversion utilities.
@@ -168,100 +173,22 @@ export class NestedJsonConverter {
 
 	/**
 	 * Apply value transformations (null detection, auto-parse numbers, booleans, custom transformer).
-	 * Transformation order: nullValues → autoParseNumbers → autoParseBooleans → valueTransformer
+	 * Transformation order: nullValues → autoParseNumbers → autoParseBooleans → valueTransformer.
+	 *
+	 * Delegates to the shared {@link transformRecordValues} so the buffered and streaming paths
+	 * stay in lockstep.
 	 */
 	private static applyValueTransformations(
 		records: InternalCsvRecord[],
 		options: CsvParserOptions
 	): TransformedRecord[] {
-		const {
-			autoParseNumbers,
-			preserveUnsafeIntegersAsString,
-			autoParseBooleans,
-			valueTransformer,
-			nullValues,
-			nullRepresentation,
-		} = options;
-
-		// Default null values
-		const nullSet = new Set((nullValues ?? ["null", "NULL", "nil", "NIL"]).map(v => v.toLowerCase()));
-
 		// If no transformations are needed, return records as-is
-		if (!autoParseNumbers && !autoParseBooleans && !valueTransformer && nullValues === undefined) {
+		if (!needsValueTransformation(options)) {
 			return records as TransformedRecord[];
 		}
 
-		return records.map(record => {
-			const transformed: TransformedRecord = {};
-
-			for (const [header, value] of Object.entries(record)) {
-				let transformedValue: TransformedRecordValue = value;
-
-				if (isQuotedEmptyCell(value)) {
-					if (nullValues !== undefined && nullSet.has("")) {
-						transformedValue = applyNullRepresentation(nullRepresentation);
-						if (nullRepresentation === "omit") {
-							continue;
-						}
-					}
-
-					transformed[header] = transformedValue;
-					continue;
-				}
-
-				// Skip empty values (unless they match nullValues)
-				if (value === "") {
-					// Check if empty string is in nullValues
-					if (nullValues !== undefined && nullSet.has("")) {
-						transformedValue = applyNullRepresentation(nullRepresentation);
-						if (nullRepresentation === "omit") {
-							continue; // Skip this field entirely
-						}
-					}
-					transformed[header] = transformedValue;
-					continue;
-				}
-
-				// Step 0: Check for null values (before number/boolean parsing)
-				if (nullValues !== undefined && nullSet.has(value.toLowerCase())) {
-					const nullVal = applyNullRepresentation(nullRepresentation);
-					if (nullRepresentation === "omit") {
-						continue; // Skip this field entirely
-					}
-					transformed[header] = nullVal;
-					continue;
-				}
-
-				// Step 1: Auto-parse numbers
-				if (autoParseNumbers) {
-					const parsed = tryParseNumber(value, preserveUnsafeIntegersAsString);
-					if (parsed !== null) {
-						transformedValue = parsed;
-					}
-				}
-
-				// Step 2: Auto-parse booleans (only if still a string)
-				if (autoParseBooleans && typeof transformedValue === "string") {
-					const parsed = tryParseBoolean(value);
-					if (parsed !== null) {
-						transformedValue = parsed;
-					}
-				}
-
-				// Step 3: Apply custom transformer
-				if (valueTransformer) {
-					transformedValue = valueTransformer(transformedValue as string | number | boolean, header) as
-						| string
-						| number
-						| boolean
-						| Date;
-				}
-
-				transformed[header] = transformedValue;
-			}
-
-			return transformed;
-		});
+		const nullSet = resolveNullSet(options);
+		return records.map(record => transformRecordValues(record, options, nullSet));
 	}
 
 	private static detectForcedArrayFields(records: ConvertibleCsvRecord[], arraySuffix: string): Set<string> {
@@ -959,35 +886,9 @@ export class NestedJsonConverter {
 	}
 
 	private static unflatten(row: TransformedRecord, options: CsvParserOptions): NestedObject {
-		const result: NestedObject = {};
-		const preserveEmptyColumns = options.preserveEmptyColumnAsEmptyString === true;
-		const preserveEmptyStrings = options.preserveEmptyString !== false;
-
-		for (const [key, value] of Object.entries(row)) {
-			if (value === undefined) continue;
-
-			let normalizedValue: NestedValue;
-
-			if (isQuotedEmptyCell(value)) {
-				if (!preserveEmptyStrings) continue;
-				normalizedValue = "";
-			} else if (value === "") {
-				if (!preserveEmptyColumns) continue;
-				normalizedValue = "";
-			} else {
-				normalizedValue = value as NestedValue;
-			}
-
-			const parts = key.split(".");
-			let current: NestedObject = result;
-			for (let i = 0; i < parts.length - 1; i++) {
-				const part = parts[i];
-				if (!current[part]) current[part] = {};
-				current = current[part] as NestedObject;
-			}
-			current[parts[parts.length - 1]] = normalizedValue;
-		}
-		return result;
+		// Headers are already suffix-normalized upstream, so the shared helper's suffix stripping
+		// is a no-op here; it is shared purely to keep the two parsing paths in lockstep.
+		return unflattenRecord(row, options);
 	}
 
 	private static isEffectivelyEmptyValue(value: unknown): boolean {
