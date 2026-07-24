@@ -5,7 +5,10 @@ import type { CsvParserOptions, NestedObject, NestedValue } from "./types";
 /**
  * Options for JSON to CSV conversion.
  */
-export interface JsonToCsvOptions extends Pick<CsvParserOptions, "delimiter" | "quote" | "encoding" | "arrayMode"> {
+export interface JsonToCsvOptions extends Pick<
+	CsvParserOptions,
+	"delimiter" | "quote" | "encoding" | "arrayMode" | "arraySuffixIndicator"
+> {
 	/**
 	 * Line ending to use in output.
 	 * @default '\n'
@@ -79,8 +82,13 @@ export class JsonToCsv {
 		const includeHeader = options.includeHeader !== false;
 		const arrayMode = options.arrayMode || "rows";
 
+		// Only the continuation-row mode reconstructs arrays on re-parse, and that requires
+		// the array suffix in the header so the parser forces those columns back into arrays.
+		// In 'json' mode arrays live in a single cell, so no suffix is emitted.
+		const arraySuffix = arrayMode === "rows" ? (options.arraySuffixIndicator ?? "[]") : "";
+
 		// Collect all unique headers from all objects
-		const headers = this.collectHeaders(data);
+		const headers = this.collectHeaders(data, arraySuffix);
 
 		// Build CSV rows
 		const rows: string[] = [];
@@ -92,7 +100,7 @@ export class JsonToCsv {
 
 		// Add data rows
 		for (const obj of data) {
-			const flatRows = this.flattenObject(obj, headers, arrayMode);
+			const flatRows = this.flattenObject(obj, headers, arrayMode, arraySuffix);
 			for (const flatRow of flatRows) {
 				const values = headers.map(header => {
 					const value = flatRow[header];
@@ -146,11 +154,11 @@ export class JsonToCsv {
 	 * Collect all unique headers from an array of nested objects.
 	 * Headers are generated using dot-notation for nested properties.
 	 */
-	private static collectHeaders(data: NestedObject[]): string[] {
+	private static collectHeaders(data: NestedObject[], arraySuffix: string): string[] {
 		const headerSet = new Set<string>();
 
 		for (const obj of data) {
-			this.collectHeadersFromObject(obj, "", headerSet);
+			this.collectHeadersFromObject(obj, "", headerSet, arraySuffix);
 		}
 
 		// Sort headers for consistent output
@@ -169,14 +177,22 @@ export class JsonToCsv {
 	/**
 	 * Recursively collect headers from a nested object.
 	 */
-	private static collectHeadersFromObject(obj: NestedObject, prefix: string, headers: Set<string>): void {
+	private static collectHeadersFromObject(
+		obj: NestedObject,
+		prefix: string,
+		headers: Set<string>,
+		arraySuffix: string
+	): void {
 		for (const [key, value] of Object.entries(obj)) {
 			const fullKey = prefix ? `${prefix}.${key}` : key;
 
 			if (Array.isArray(value)) {
+				// Mark the array-owning segment with the suffix so it re-parses as an array.
+				const arrayKey = `${fullKey}${arraySuffix}`;
+
 				if (value.length === 0) {
 					// Empty array - still add the header
-					headers.add(fullKey);
+					headers.add(arrayKey);
 					continue;
 				}
 
@@ -184,17 +200,17 @@ export class JsonToCsv {
 				for (const item of value) {
 					if (item && typeof item === "object" && !Array.isArray(item)) {
 						hasObjectItems = true;
-						this.collectHeadersFromObject(item as NestedObject, fullKey, headers);
+						this.collectHeadersFromObject(item as NestedObject, arrayKey, headers, arraySuffix);
 					}
 				}
 
 				if (!hasObjectItems) {
 					// Array of primitives
-					headers.add(fullKey);
+					headers.add(arrayKey);
 				}
 			} else if (value && typeof value === "object" && !(value instanceof Date)) {
 				// Nested object
-				this.collectHeadersFromObject(value as NestedObject, fullKey, headers);
+				this.collectHeadersFromObject(value as NestedObject, fullKey, headers, arraySuffix);
 			} else {
 				// Primitive value (or Date, treated as a scalar)
 				headers.add(fullKey);
@@ -209,13 +225,14 @@ export class JsonToCsv {
 	private static flattenObject(
 		obj: NestedObject,
 		headers: string[],
-		arrayMode: "rows" | "json"
+		arrayMode: "rows" | "json",
+		arraySuffix: string
 	): Record<string, string>[] {
 		// First, flatten the object to get all paths and values
 		const flatValues: Record<string, NestedValue> = {};
 		const arrayValues: Record<string, NestedValue[]> = {};
 
-		this.flattenToPathValues(obj, "", flatValues, arrayValues);
+		this.flattenToPathValues(obj, "", flatValues, arrayValues, arraySuffix);
 
 		// If no arrays or arrayMode is 'json', return single row
 		if (Object.keys(arrayValues).length === 0 || arrayMode === "json") {
@@ -234,7 +251,7 @@ export class JsonToCsv {
 		}
 
 		// ArrayMode is 'rows' - generate continuation rows
-		return this.generateContinuationRows(headers, flatValues, arrayValues);
+		return this.generateContinuationRows(headers, flatValues, arrayValues, arraySuffix);
 	}
 
 	/**
@@ -244,22 +261,17 @@ export class JsonToCsv {
 		obj: NestedObject,
 		prefix: string,
 		flatValues: Record<string, NestedValue>,
-		arrayValues: Record<string, NestedValue[]>
+		arrayValues: Record<string, NestedValue[]>,
+		arraySuffix: string
 	): void {
 		for (const [key, value] of Object.entries(obj)) {
 			const fullKey = prefix ? `${prefix}.${key}` : key;
 
 			if (Array.isArray(value)) {
-				// Check if array of objects or primitives
-				if (value.length > 0 && typeof value[0] === "object" && value[0] !== null && !Array.isArray(value[0])) {
-					// Array of objects - need to handle specially
-					arrayValues[fullKey] = value;
-				} else {
-					// Array of primitives
-					arrayValues[fullKey] = value;
-				}
+				// Key array values by the suffixed path so they align with the emitted headers.
+				arrayValues[`${fullKey}${arraySuffix}`] = value;
 			} else if (value && typeof value === "object" && !(value instanceof Date)) {
-				this.flattenToPathValues(value as NestedObject, fullKey, flatValues, arrayValues);
+				this.flattenToPathValues(value as NestedObject, fullKey, flatValues, arrayValues, arraySuffix);
 			} else {
 				// Primitive value (or Date, treated as a scalar)
 				flatValues[fullKey] = value;
@@ -274,7 +286,8 @@ export class JsonToCsv {
 	private static generateContinuationRows(
 		headers: string[],
 		flatValues: Record<string, NestedValue>,
-		arrayValues: Record<string, NestedValue[]>
+		arrayValues: Record<string, NestedValue[]>,
+		arraySuffix: string
 	): Record<string, string>[] {
 		const arrayPaths = Object.keys(arrayValues).sort((a, b) => b.length - a.length);
 
@@ -302,7 +315,7 @@ export class JsonToCsv {
 							row[header] = this.valueToString(item as NestedValue);
 						} else if (item && typeof item === "object" && !Array.isArray(item)) {
 							const relativePath = header.slice(arrayPath.length + 1);
-							const nestedValue = this.getNestedValueAtPath(item as NestedObject, relativePath);
+							const nestedValue = this.getNestedValueAtPath(item as NestedObject, relativePath, arraySuffix);
 							row[header] = nestedValue === undefined ? "" : this.valueToString(nestedValue);
 						} else {
 							row[header] = "";
@@ -340,7 +353,7 @@ export class JsonToCsv {
 	/**
 	 * Read a nested value from an object using dot-notation.
 	 */
-	private static getNestedValueAtPath(obj: NestedObject, path: string): NestedValue | undefined {
+	private static getNestedValueAtPath(obj: NestedObject, path: string, arraySuffix = ""): NestedValue | undefined {
 		if (!path) return obj;
 
 		const parts = path.split(".");
@@ -352,7 +365,9 @@ export class JsonToCsv {
 				return undefined;
 			}
 
-			current = (current as NestedObject)[part];
+			// Header segments carry the array suffix (e.g. `tags[]`) but object keys do not.
+			const key = arraySuffix && part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part;
+			current = (current as NestedObject)[key];
 		}
 
 		return current;

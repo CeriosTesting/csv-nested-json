@@ -170,7 +170,8 @@ describe("JsonToCsv", () => {
 			const lines = result.split("\n");
 
 			expect(lines).toHaveLength(4); // header + 3 data rows
-			expect(lines[0]).toBe("id,tags");
+			// Array columns carry the array suffix so the output re-parses back into an array.
+			expect(lines[0]).toBe("id,tags[]");
 			expect(lines[1]).toBe("1,js");
 			expect(lines[2]).toBe(",ts");
 			expect(lines[3]).toBe(",node");
@@ -199,8 +200,8 @@ describe("JsonToCsv", () => {
 			const result = JsonToCsv.stringify(data);
 
 			// Check headers and values are emitted for object-array rows
-			expect(result).toContain("phones.type");
-			expect(result).toContain("phones.number");
+			expect(result).toContain("phones[].type");
+			expect(result).toContain("phones[].number");
 			expect(result).toContain("mobile");
 			expect(result).toContain("home");
 			expect(result).toContain("555-0001");
@@ -220,7 +221,7 @@ describe("JsonToCsv", () => {
 
 			const result = JsonToCsv.stringify(data);
 
-			expect(result).toContain("phones.extension");
+			expect(result).toContain("phones[].extension");
 			expect(result).toContain("123");
 		});
 
@@ -246,6 +247,34 @@ describe("JsonToCsv", () => {
 
 			// Should have rows for the longest array
 			expect(lines.length).toBeGreaterThanOrEqual(4);
+		});
+	});
+
+	describe("round-trip (JSON -> CSV -> JSON)", () => {
+		it("reconstructs a primitive array via the emitted [] header", () => {
+			const data = [{ id: "1", tags: ["js", "ts", "node"] }];
+
+			const csv = JsonToCsv.stringify(data, { arrayMode: "rows" });
+			const parsed = CsvParser.parseString(csv);
+
+			expect(parsed).toEqual(data);
+		});
+
+		it("reconstructs an object array via the emitted [] header", () => {
+			const data = [
+				{
+					id: "1",
+					phones: [
+						{ type: "mobile", number: "555-0001" },
+						{ type: "home", number: "555-0002" },
+					],
+				},
+			];
+
+			const csv = JsonToCsv.stringify(data, { arrayMode: "rows" });
+			const parsed = CsvParser.parseString(csv);
+
+			expect(parsed).toEqual(data);
 		});
 	});
 

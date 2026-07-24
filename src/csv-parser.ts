@@ -11,9 +11,8 @@ import type { CsvParserOptions, NestedObject } from "./types";
  *
  * The parser supports:
  * - Dot-notation headers for nested objects (`person.address.city`)
- * - Automatic array detection when values collide
- * - Forced array fields with `[]` suffix (`tags[]`)
- * - Continuation rows (rows with empty first column extend previous record)
+ * - Array fields via the `[]` header suffix (`tags[]`); arrays are never created implicitly
+ * - Continuation rows (rows with empty first column extend previous record, filling `[]` arrays)
  * - Value transformation (auto-parse numbers, booleans, custom transformers)
  * - BOM stripping and row skipping
  *
@@ -132,8 +131,8 @@ export abstract class CsvParser {
 	 *
 	 * @example
 	 * ```typescript
-	 * // With continuation rows for arrays
-	 * const csv = `id,tags
+	 * // With continuation rows for arrays (the `[]` suffix is required)
+	 * const csv = `id,tags[]
 	 * 1,javascript
 	 * ,typescript
 	 * ,nodejs`;

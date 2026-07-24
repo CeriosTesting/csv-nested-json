@@ -19,13 +19,12 @@ describe("limit option (non-streaming parser)", () => {
 	});
 
 	it("treats limit as a count of output records, not raw rows (continuation rows)", () => {
-		const csv = "id,tags\n1,a\n,b\n,c\n2,d\n3,e";
+		const csv = "id,tags[]\n1,a\n,b\n,c\n2,d\n3,e";
 		// limit: 2 => first two grouped records; the multi-row group counts as one.
 		const result = CsvParser.parseString(csv, { limit: 2 });
 		expect(result).toHaveLength(2);
 		expect(result[0]).toEqual({ id: "1", tags: ["a", "b", "c"] });
-		// `tags` is detected as an array field across the (limited) groups, so the
-		// single-value group is normalized to a one-element array.
+		// `tags[]` is a forced array, so the single-value group is a one-element array.
 		expect(result[1]).toEqual({ id: "2", tags: ["d"] });
 	});
 

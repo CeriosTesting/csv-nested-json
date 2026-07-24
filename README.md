@@ -1,12 +1,12 @@
 # @cerios/csv-nested-json
 
-A powerful TypeScript CSV parser that transforms flat CSV data into nested JSON objects with support for dot notation, automatic array detection, and complex hierarchical structures.
+A powerful TypeScript CSV parser that transforms flat CSV data into nested JSON objects with support for dot notation, explicit array fields, and complex hierarchical structures.
 
 ## 🚀 Features
 
 - **Zero Dependencies** - No external CSV parsing libraries
 - **Nested Objects** - Use dot notation in headers (e.g., `address.city`)
-- **Automatic Array Detection** - Smart array creation for grouped rows
+- **Explicit Array Fields** - Opt into arrays with the `[]` header suffix (e.g., `tags[]`); values are never grouped into arrays implicitly
 - **Multi-Level Nesting** - Support for deeply nested structures
 - **Multiple Input Methods** - Parse from files (sync/async), strings, or streams
 - **True Streaming Parser** - Memory-efficient parsing for very large files
@@ -16,7 +16,7 @@ A powerful TypeScript CSV parser that transforms flat CSV data into nested JSON 
 - **Limit Records** - Stop parsing after N records for previews or pagination
 - **Progress Monitoring** - Track parsing progress with callbacks for large files
 - **Batch Processing** - Process records in configurable batches for memory efficiency
-- **Value Transformations** - Auto-parse numbers, booleans, dates, or use custom transformers
+- **Value Transformations** - Auto-parse numbers and booleans, or use custom transformers
 - **Header Transformations** - Transform and map column names
 - **Row Filtering** - Filter rows during parsing for memory efficiency
 - **RFC 4180 Compliant** - Handles quoted fields, escaped quotes, and various line endings
@@ -307,12 +307,13 @@ const result = CsvParser.parseFileSync("./nested-data.csv");
 
 ### Arrays from Grouped Rows
 
-Rows without a value in the first column are treated as continuation rows and automatically create arrays:
+Arrays are always explicit: mark the array column with the `[]` suffix. Rows without a value in
+the first column are continuation rows that append to the previous record's `[]` arrays.
 
 **Input CSV:**
 
 ```csv
-id,name,phones.type,phones.number
+id,name,phones[].type,phones[].number
 1,Alice,mobile,555-0001
 ,,home,555-0002
 ,,work,555-0003
@@ -339,6 +340,9 @@ const result = CsvParser.parseFileSync("./grouped-data.csv");
 	}
 ]
 ```
+
+> **Note:** Without the `[]` suffix, a repeated column value inside a single group is treated as a
+> mistake and throws `CsvParseError` — values are never silently collapsed into an array.
 
 ### Deeply Nested Structures
 
@@ -423,25 +427,21 @@ const result = CsvParser.parseString(csvContent, {
 
 **Note:** Strings with leading zeros (like `"007"`) are preserved as strings to avoid data loss.
 
-### Auto-Parse Dates
+### Parsing Dates
+
+There is no built-in date option: `Date.parse` recognition is too loose and locale-dependent, so
+date-looking strings are kept as plain strings. To produce `Date` objects, use a `valueTransformer`:
 
 ```typescript
-const csvContent = `id,name,createdAt,updatedAt
-1,Alice,2024-01-15,2024-06-30T10:30:00Z`;
+const csvContent = `id,name,createdAt
+1,Alice,2024-01-15`;
 
 const result = CsvParser.parseString(csvContent, {
-	autoParseDates: true,
+	valueTransformer: (value, header) => (header === "createdAt" && typeof value === "string" ? new Date(value) : value),
 });
 
 // Result:
-// [
-//   {
-//     id: "1",
-//     name: "Alice",
-//     createdAt: Date("2024-01-15"),
-//     updatedAt: Date("2024-06-30T10:30:00Z")
-//   }
-// ]
+// [{ id: "1", name: "Alice", createdAt: Date("2024-01-15") }]
 ```
 
 ### Custom Value Transformer
@@ -734,7 +734,7 @@ const result2 = CsvParser.parseString(csvContent, {
 **Input CSV:**
 
 ```csv
-id,username,profile.firstName,profile.lastName,addresses.type,addresses.city
+id,username,profile.firstName,profile.lastName,addresses[].type,addresses[].city
 1,johndoe,John,Doe,home,New York
 ,,,,work,Boston
 2,janedoe,Jane,Doe,home,Chicago
@@ -774,7 +774,7 @@ const result = CsvParser.parseFileSync("./complex-data.csv");
 ]
 ```
 
-**Note:** Array shape is normalized across records. If one record needs an array for a path, other records with a single value for that path are represented as single-item arrays.
+**Note:** A `[]` array field is normalized across records: a record with a single value for that path is represented as a single-item array.
 
 ### Custom Delimiters
 
@@ -931,6 +931,9 @@ const results = await Promise.all(files.map(file => CsvParser.parseFile(file)));
 
 ## 🧪 Options Reference
 
+> The authoritative option definitions live in [`src/types.ts`](src/types.ts). The interface below
+> is a convenience summary and may lag behind the source.
+
 ### CsvParserOptions
 
 ```typescript
@@ -962,7 +965,6 @@ interface CsvParserOptions {
 	autoParseNumbers?: boolean; // Default: false
 	preserveUnsafeIntegersAsString?: boolean; // Default: false
 	autoParseBooleans?: boolean; // Default: false
-	autoParseDates?: boolean; // Default: false
 	valueTransformer?: (value, header) => any; // Custom value transformer
 
 	// Header transformations
@@ -1063,10 +1065,6 @@ const result = CsvParser.parseString(csv, {
 #### `autoParseBooleans`
 
 Automatically convert `'true'`/`'false'` strings to booleans (case-insensitive).
-
-#### `autoParseDates`
-
-Automatically convert date strings to JavaScript Date objects using `Date.parse()`.
 
 #### `valueTransformer`
 
@@ -1241,7 +1239,6 @@ const result = await CsvParser.parseFile("./data.csv", {
 	// Value transformations
 	autoParseNumbers: true,
 	autoParseBooleans: true,
-	autoParseDates: true,
 	valueTransformer: (value, header) => {
 		if (header === "email") return value.toLowerCase();
 		return value;
@@ -1349,8 +1346,13 @@ const csv = JsonToCsv.stringify(data, {
 	delimiter: ",",
 	quote: '"',
 	arrayMode: "rows", // 'rows' (continuation rows) or 'json' (stringify arrays)
+	arraySuffixIndicator: "[]", // suffix added to array headers in 'rows' mode (default '[]')
 });
 ```
+
+In `'rows'` mode, array columns are emitted with the `arraySuffixIndicator` suffix (for example
+`tags[]`, `phones[].type`) so the output re-parses back into arrays. In `'json'` mode the suffix is
+not used because each array is written to a single cell.
 
 ### Error Classes
 
@@ -1426,12 +1428,13 @@ Creates:
 }
 ```
 
-### 3. Automatic Array Detection
+### 3. Explicit Array Fields
 
-When the same key path appears multiple times within a group, an array is automatically created:
+Arrays are created only for columns marked with the `[]` suffix. Within a group, continuation rows
+append to those arrays:
 
 ```csv
-id,contact.type,contact.value
+id,contact[].type,contact[].value
 1,email,alice@example.com
 ,,phone,555-1234
 ```
@@ -1447,6 +1450,9 @@ Creates:
 	]
 }
 ```
+
+If the same non-`[]` path has a value in more than one row of a group, the parser throws
+`CsvParseError` rather than guessing an array — add the `[]` suffix to make the intent explicit.
 
 ### 4. Empty Value Handling
 
@@ -1512,7 +1518,7 @@ for (let i = 1; i < lines.length; i++) {
 const result = CsvParser.parseFileSync("data.csv");
 
 // ✅ Automatic nested object creation
-// ✅ Automatic array detection
+// ✅ Explicit array fields via the `[]` suffix
 // ✅ RFC 4180 compliant parsing
 // ✅ Flexible configuration options
 ```
@@ -1640,7 +1646,6 @@ interface CsvStreamParserOptions extends CsvParserOptions {
    const result = CsvParser.parseFileSync("./data.csv", {
    	autoParseNumbers: true,
    	autoParseBooleans: true,
-   	autoParseDates: true,
    });
    ```
 

@@ -82,9 +82,9 @@ describe("NestedJsonConverter", () => {
 
 		it("should create arrays when same key appears in multiple rows", () => {
 			const records = [
-				{ id: "1", name: "John", hobby: "Reading" },
-				{ id: "", name: "", hobby: "Swimming" },
-				{ id: "", name: "", hobby: "Cycling" },
+				{ id: "1", name: "John", "hobby[]": "Reading" },
+				{ id: "", name: "", "hobby[]": "Swimming" },
+				{ id: "", name: "", "hobby[]": "Cycling" },
 			];
 			const result = NestedJsonConverter.convert(records);
 
@@ -99,9 +99,9 @@ describe("NestedJsonConverter", () => {
 
 		it("should create arrays for nested properties", () => {
 			const records = [
-				{ id: "1", name: "Alice", "phones.type": "mobile", "phones.number": "555-0001" },
-				{ id: "", name: "", "phones.type": "home", "phones.number": "555-0002" },
-				{ id: "", name: "", "phones.type": "work", "phones.number": "555-0003" },
+				{ id: "1", name: "Alice", "phones[].type": "mobile", "phones[].number": "555-0001" },
+				{ id: "", name: "", "phones[].type": "home", "phones[].number": "555-0002" },
+				{ id: "", name: "", "phones[].type": "work", "phones[].number": "555-0003" },
 			];
 			const result = NestedJsonConverter.convert(records);
 
@@ -120,8 +120,20 @@ describe("NestedJsonConverter", () => {
 
 		it("should handle arrays with deeply nested objects", () => {
 			const records = [
-				{ id: "1", name: "Customer1", "orders.id": "100", "orders.items.name": "Widget", "orders.items.price": "9.99" },
-				{ id: "", name: "", "orders.id": "101", "orders.items.name": "Gadget", "orders.items.price": "19.99" },
+				{
+					id: "1",
+					name: "Customer1",
+					"orders[].id": "100",
+					"orders[].items.name": "Widget",
+					"orders[].items.price": "9.99",
+				},
+				{
+					id: "",
+					name: "",
+					"orders[].id": "101",
+					"orders[].items.name": "Gadget",
+					"orders[].items.price": "19.99",
+				},
 			];
 			const result = NestedJsonConverter.convert(records);
 
@@ -139,11 +151,11 @@ describe("NestedJsonConverter", () => {
 
 		it("should handle multiple groups with arrays", () => {
 			const records = [
-				{ id: "1", name: "User1", tags: "tag1" },
-				{ id: "", name: "", tags: "tag2" },
-				{ id: "2", name: "User2", tags: "tag3" },
-				{ id: "", name: "", tags: "tag4" },
-				{ id: "", name: "", tags: "tag5" },
+				{ id: "1", name: "User1", "tags[]": "tag1" },
+				{ id: "", name: "", "tags[]": "tag2" },
+				{ id: "2", name: "User2", "tags[]": "tag3" },
+				{ id: "", name: "", "tags[]": "tag4" },
+				{ id: "", name: "", "tags[]": "tag5" },
 			];
 			const result = NestedJsonConverter.convert(records);
 
@@ -163,12 +175,12 @@ describe("NestedJsonConverter", () => {
 
 		it("should maintain consistent array structure across all records", () => {
 			const records = [
-				{ id: "1", name: "User1", tags: "tag1" },
-				{ id: "", name: "", tags: "tag2" },
-				{ id: "", name: "", tags: "tag3" },
-				{ id: "2", name: "User2", tags: "single-tag" },
-				{ id: "3", name: "User3", tags: "tag-a" },
-				{ id: "", name: "", tags: "tag-b" },
+				{ id: "1", name: "User1", "tags[]": "tag1" },
+				{ id: "", name: "", "tags[]": "tag2" },
+				{ id: "", name: "", "tags[]": "tag3" },
+				{ id: "2", name: "User2", "tags[]": "single-tag" },
+				{ id: "3", name: "User3", "tags[]": "tag-a" },
+				{ id: "", name: "", "tags[]": "tag-b" },
 			];
 			const result = NestedJsonConverter.convert(records);
 
@@ -217,17 +229,23 @@ describe("NestedJsonConverter", () => {
 				{
 					id: "1",
 					company: "TechCorp",
-					"projects.name": "Website",
-					"projects.team.lead": "Alice",
-					"projects.team.size": "5",
+					"projects[].name": "Website",
+					"projects[].team.lead": "Alice",
+					"projects[].team.size": "5",
 				},
-				{ id: "", company: "", "projects.name": "Mobile App", "projects.team.lead": "Bob", "projects.team.size": "8" },
+				{
+					id: "",
+					company: "",
+					"projects[].name": "Mobile App",
+					"projects[].team.lead": "Bob",
+					"projects[].team.size": "8",
+				},
 				{
 					id: "2",
 					company: "DesignCo",
-					"projects.name": "Dashboard",
-					"projects.team.lead": "Charlie",
-					"projects.team.size": "3",
+					"projects[].name": "Dashboard",
+					"projects[].team.lead": "Charlie",
+					"projects[].team.size": "3",
 				},
 			];
 			const result = NestedJsonConverter.convert(records);
@@ -262,11 +280,29 @@ describe("NestedJsonConverter", () => {
 
 		it("should support multiple array fields at same level", () => {
 			const records = [
-				{ id: "1", user: "Alice", skills: "JavaScript", "certifications.name": "AWS", "certifications.year": "2023" },
-				{ id: "", user: "", skills: "TypeScript", "certifications.name": "Azure", "certifications.year": "2024" },
-				{ id: "", user: "", skills: "React", "certifications.name": "", "certifications.year": "" },
-				{ id: "2", user: "Bob", skills: "Python", "certifications.name": "GCP", "certifications.year": "2023" },
-				{ id: "", user: "", skills: "Django", "certifications.name": "", "certifications.year": "" },
+				{
+					id: "1",
+					user: "Alice",
+					"skills[]": "JavaScript",
+					"certifications[].name": "AWS",
+					"certifications[].year": "2023",
+				},
+				{
+					id: "",
+					user: "",
+					"skills[]": "TypeScript",
+					"certifications[].name": "Azure",
+					"certifications[].year": "2024",
+				},
+				{ id: "", user: "", "skills[]": "React", "certifications[].name": "", "certifications[].year": "" },
+				{
+					id: "2",
+					user: "Bob",
+					"skills[]": "Python",
+					"certifications[].name": "GCP",
+					"certifications[].year": "2023",
+				},
+				{ id: "", user: "", "skills[]": "Django", "certifications[].name": "", "certifications[].year": "" },
 			];
 			const result = NestedJsonConverter.convert(records);
 
@@ -320,10 +356,10 @@ describe("NestedJsonConverter", () => {
 					"profile.firstName": "John",
 					"profile.lastName": "Doe",
 					"profile.age": "30",
-					"addresses.type": "home",
-					"addresses.street": "123 Main St",
-					"addresses.city": "New York",
-					"addresses.zip": "10001",
+					"addresses[].type": "home",
+					"addresses[].street": "123 Main St",
+					"addresses[].city": "New York",
+					"addresses[].zip": "10001",
 				},
 				{
 					id: "",
@@ -332,10 +368,10 @@ describe("NestedJsonConverter", () => {
 					"profile.firstName": "",
 					"profile.lastName": "",
 					"profile.age": "",
-					"addresses.type": "work",
-					"addresses.street": "456 Office Blvd",
-					"addresses.city": "New York",
-					"addresses.zip": "10002",
+					"addresses[].type": "work",
+					"addresses[].street": "456 Office Blvd",
+					"addresses[].city": "New York",
+					"addresses[].zip": "10002",
 				},
 				{
 					id: "2",
@@ -344,10 +380,10 @@ describe("NestedJsonConverter", () => {
 					"profile.firstName": "Jane",
 					"profile.lastName": "Doe",
 					"profile.age": "28",
-					"addresses.type": "",
-					"addresses.street": "",
-					"addresses.city": "",
-					"addresses.zip": "",
+					"addresses[].type": "",
+					"addresses[].street": "",
+					"addresses[].city": "",
+					"addresses[].zip": "",
 				},
 				{
 					id: "",
@@ -356,10 +392,10 @@ describe("NestedJsonConverter", () => {
 					"profile.firstName": "",
 					"profile.lastName": "",
 					"profile.age": "",
-					"addresses.type": "home",
-					"addresses.street": "789 Park Ave",
-					"addresses.city": "Boston",
-					"addresses.zip": "02101",
+					"addresses[].type": "home",
+					"addresses[].street": "789 Park Ave",
+					"addresses[].city": "Boston",
+					"addresses[].zip": "02101",
 				},
 			];
 			const result = NestedJsonConverter.convert(records);

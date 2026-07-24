@@ -123,7 +123,7 @@ describe("CsvParser - Integration Tests", () => {
 		});
 
 		it("should handle arrays in continuation rows", () => {
-			const csvContent = `id,name,skills
+			const csvContent = `id,name,skills[]
 1,Alice,JavaScript
 ,,TypeScript
 ,,React`;
@@ -193,7 +193,7 @@ describe("CsvParser - Integration Tests", () => {
 
 	describe("End-to-end complex scenarios", () => {
 		it("should handle realistic user data with all features", () => {
-			const csvContent = `id,username,email,profile.firstName,profile.lastName,addresses.type,addresses.street,addresses.city
+			const csvContent = `id,username,email,profile.firstName,profile.lastName,addresses[].type,addresses[].street,addresses[].city
 1,johndoe,john@example.com,John,Doe,home,123 Main St,NYC
 ,,,,,work,456 Office Blvd,NYC
 2,janedoe,jane@example.com,Jane,Doe,home,789 Park Ave,Boston`;
@@ -241,7 +241,7 @@ describe("CsvParser - Integration Tests", () => {
 		});
 
 		it("should handle mixed nesting and arrays", () => {
-			const csvContent = `id,company,projects.name,projects.team.lead,projects.team.size
+			const csvContent = `id,company,projects[].name,projects[].team.lead,projects[].team.size
 1,TechCorp,Website,Alice,5
 ,,Mobile App,Bob,8
 2,DesignCo,Dashboard,Charlie,3`;

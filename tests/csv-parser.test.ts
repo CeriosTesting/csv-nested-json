@@ -151,10 +151,10 @@ describe("CsvParser", () => {
 			});
 		});
 
-		describe("Arrays (via collision)", () => {
+		describe("Arrays (via [] suffix)", () => {
 			it("should create arrays when same key appears in multiple rows of same group", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "array-simple.csv");
-				const csvContent = `id,name,hobby
+				const csvContent = `id,name,hobby[]
 1,John,Reading
 ,,Swimming
 ,,Cycling`;
@@ -173,7 +173,7 @@ describe("CsvParser", () => {
 
 			it("should create arrays for nested properties", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "array-nested.csv");
-				const csvContent = `id,name,phones.type,phones.number
+				const csvContent = `id,name,phones[].type,phones[].number
 1,Alice,mobile,555-0001
 ,,home,555-0002
 ,,work,555-0003`;
@@ -196,7 +196,7 @@ describe("CsvParser", () => {
 
 			it("should handle arrays with deeply nested objects", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "array-deep-nested.csv");
-				const csvContent = `id,name,orders.id,orders.items.name,orders.items.price
+				const csvContent = `id,name,orders[].id,orders[].items.name,orders[].items.price
 1,Customer1,100,Widget,9.99
 ,,101,Gadget,19.99`;
 				fs.writeFileSync(csvPath, csvContent);
@@ -214,12 +214,23 @@ describe("CsvParser", () => {
 					},
 				]);
 			});
+
+			it("should throw when a non-[] column repeats across continuation rows", () => {
+				const csvPath = path.join(TEST_DATA_DIR, "array-missing-suffix.csv");
+				const csvContent = `id,name,hobby
+1,John,Reading
+,,Swimming`;
+				fs.writeFileSync(csvPath, csvContent);
+
+				// Without the [] suffix, a repeated value is a collision, not an auto-array.
+				expect(() => CsvParser.parseFileSync(csvPath)).toThrow(/array suffix/);
+			});
 		});
 
 		describe("Complex scenarios", () => {
 			it("should handle mix of flat, nested, and array data", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "complex-mix.csv");
-				const csvContent = `id,name,email,address.street,address.city,skills
+				const csvContent = `id,name,email,address.street,address.city,skills[]
 1,John Doe,john@example.com,123 Main St,NYC,JavaScript
 ,,,,,TypeScript
 ,,,,,React`;
@@ -243,7 +254,7 @@ describe("CsvParser", () => {
 
 			it("should handle multiple groups with arrays", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "multiple-groups-arrays.csv");
-				const csvContent = `id,name,tags
+				const csvContent = `id,name,tags[]
 1,User1,tag1
 ,,tag2
 2,User2,tag3
@@ -292,7 +303,7 @@ describe("CsvParser", () => {
 
 			it("should handle complex nested arrays with multiple properties", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "complex-arrays.csv");
-				const csvContent = `id,name,projects.name,projects.role,projects.duration
+				const csvContent = `id,name,projects[].name,projects[].role,projects[].duration
 1,Developer,Project A,Lead,12 months
 ,,Project B,Contributor,6 months
 ,,Project C,Lead,8 months`;
@@ -315,7 +326,7 @@ describe("CsvParser", () => {
 
 			it("should handle realistic user data with multiple nested levels and arrays", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "realistic-user.csv");
-				const csvContent = `id,username,email,profile.firstName,profile.lastName,profile.age,addresses.type,addresses.street,addresses.city,addresses.zip
+				const csvContent = `id,username,email,profile.firstName,profile.lastName,profile.age,addresses[].type,addresses[].street,addresses[].city,addresses[].zip
 1,johndoe,john@example.com,John,Doe,30,home,123 Main St,New York,10001
 ,,,,,,work,456 Office Blvd,New York,10002
 2,janedoe,jane@example.com,Jane,Doe,28,,,,
@@ -372,7 +383,7 @@ describe("CsvParser", () => {
 
 			it("should maintain consistent array structure across all records", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "consistent-arrays.csv");
-				const csvContent = `id,name,tags
+				const csvContent = `id,name,tags[]
 1,User1,tag1
 ,,tag2
 ,,tag3
@@ -418,7 +429,7 @@ describe("CsvParser", () => {
 
 			it("should handle rows with whitespace in identifier", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "whitespace-id.csv");
-				const csvContent = `id,name
+				const csvContent = `id,name[]
 1,Alice
 ,Bob`;
 				fs.writeFileSync(csvPath, csvContent);
@@ -462,7 +473,7 @@ describe("CsvParser", () => {
 
 			it("should handle single row continuation without identifier", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "single-continuation.csv");
-				const csvContent = `id,name,hobby
+				const csvContent = `id,name,hobby[]
 1,Alice,Reading
 ,,Swimming`;
 				fs.writeFileSync(csvPath, csvContent);
@@ -651,7 +662,7 @@ Line 3"`;
 		describe("Deep nested mixed structures", () => {
 			it("should support 3-level nesting with arrays of complex objects", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "three-level-complex.csv");
-				const csvContent = `id,company,projects.name,projects.team.lead,projects.team.size
+				const csvContent = `id,company,projects[].name,projects[].team.lead,projects[].team.size
 1,TechCorp,Website,Alice,5
 ,,Mobile App,Bob,8
 2,DesignCo,Dashboard,Charlie,3`;
@@ -689,7 +700,7 @@ Line 3"`;
 
 			it("should support multiple array fields at same level", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "multi-array-same-level.csv");
-				const csvContent = `id,user,skills,certifications.name,certifications.year
+				const csvContent = `id,user,skills[],certifications[].name,certifications[].year
 1,Alice,JavaScript,AWS,2023
 ,,TypeScript,Azure,2024
 ,,React,,
@@ -720,7 +731,7 @@ Line 3"`;
 
 			it("should handle combination of nested objects and arrays at different paths", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "mixed-paths-arrays.csv");
-				const csvContent = `id,company,metadata.created,metadata.updated,tags
+				const csvContent = `id,company,metadata.created,metadata.updated,tags[]
 1,TechCorp,2023-01-01,2023-12-31,javascript
 ,,,,typescript
 ,,,,nodejs

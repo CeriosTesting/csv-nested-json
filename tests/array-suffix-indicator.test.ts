@@ -229,8 +229,8 @@ describe("Array Suffix Indicator", () => {
 	});
 
 	describe("complex scenarios", () => {
-		it("should handle mix of forced and auto-detected arrays", () => {
-			const csvContent = `id,name,children[].name,hobbies
+		it("should handle multiple forced arrays of differing lengths", () => {
+			const csvContent = `id,name,children[].name,hobbies[]
 1,John,Alice,reading
 ,,Bob,swimming
 ,,,cycling`;

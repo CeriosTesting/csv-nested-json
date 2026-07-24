@@ -568,7 +568,8 @@ describe("Edge Cases", () => {
 			const lines = csv.split("\n");
 
 			expect(lines).toHaveLength(4); // header + 3 data rows
-			expect(lines[0]).toBe("id,tags");
+			// Array columns carry the array suffix so the output re-parses back into an array.
+			expect(lines[0]).toBe("id,tags[]");
 			expect(lines[1]).toBe("1,js");
 			expect(lines[2]).toBe(",ts");
 			expect(lines[3]).toBe(",node");

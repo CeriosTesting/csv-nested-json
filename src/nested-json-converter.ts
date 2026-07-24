@@ -22,8 +22,8 @@ type TransformedRecord = Record<string, TransformedRecordValue>;
  * Features:
  * - Dot-notation paths in headers become nested objects
  * - Rows with empty first column are continuation rows (extend previous record)
- * - Automatic array detection when values collide during merge
- * - Forced array fields via `[]` suffix in headers
+ * - Array fields via the `[]` suffix in headers; arrays are never created implicitly.
+ *   A repeated non-`[]` path within a group throws `CsvParseError`.
  * - Value transformation (auto-parse numbers, booleans, custom transformers)
  *
  * @example
@@ -145,20 +145,16 @@ export class NestedJsonConverter {
 		const limit = options.limit;
 		const limitedGroups = limit !== undefined && limit > 0 ? groups.slice(0, limit) : groups;
 
-		// First pass: process all groups with hierarchy-aware merging
+		// Process all groups with hierarchy-aware merging. Arrays are created ONLY for
+		// forced array fields (`[]` suffix). A repeated non-forced path within a group is
+		// treated as an error rather than being silently promoted to an array.
 		const processedGroups = limitedGroups.map(group =>
-			this.processGroupWithHierarchy(group, hierarchy, forcedArrayFields, options)
+			this.processGroupWithHierarchy(group, hierarchy, forcedArrayFields, arraySuffix, options)
 		);
 
-		// Second pass: detect which fields are arrays in any group (auto-detected)
-		const autoArrayFields = this.detectArrayFields(processedGroups);
-
-		// Merge forced and auto-detected array fields
-		const allArrayFields = new Set([...forcedArrayFields, ...autoArrayFields]);
-
-		// Third pass: normalize all groups to have consistent array fields
+		// Normalize all groups so forced array fields are consistently arrays.
 		return processedGroups.map(group =>
-			this.normalizeArrays(group, allArrayFields, forcedArrayFields, emptyArrayBehavior)
+			this.normalizeArrays(group, forcedArrayFields, forcedArrayFields, emptyArrayBehavior)
 		);
 	}
 
@@ -314,11 +310,11 @@ export class NestedJsonConverter {
 		});
 	}
 
-	private static processGroup(rows: TransformedRecord[], options: CsvParserOptions): NestedObject {
+	private static processGroup(rows: TransformedRecord[], arraySuffix: string, options: CsvParserOptions): NestedObject {
 		const result: NestedObject = {};
 		for (const row of rows) {
 			const rowObj = this.unflatten(row, options);
-			this.deepMerge(result, rowObj);
+			this.deepMerge(result, rowObj, arraySuffix);
 		}
 		return result;
 	}
@@ -460,13 +456,14 @@ export class NestedJsonConverter {
 		rows: TransformedRecord[],
 		hierarchy: ForcedArrayHierarchy,
 		forcedArrayFields: Set<string>,
+		arraySuffix: string,
 		options: CsvParserOptions
 	): NestedObject {
 		if (rows.length === 0) return {};
 
 		// If no forced array fields, use the simple merge
 		if (forcedArrayFields.size === 0) {
-			return this.processGroup(rows, options);
+			return this.processGroup(rows, arraySuffix, options);
 		}
 
 		const result: NestedObject = {};
@@ -479,11 +476,20 @@ export class NestedJsonConverter {
 
 			if (isFirstRow) {
 				// First row: merge normally and track last items for each forced array
-				this.deepMergeWithTracking(result, unflattened, "", hierarchy, mergeState, forcedArrayFields);
+				this.deepMergeWithTracking(result, unflattened, "", hierarchy, mergeState, forcedArrayFields, arraySuffix);
 			} else {
 				// Continuation row: use context-aware merging
 				const rowContext = this.analyzeRowContext(row, hierarchy);
-				this.contextAwareMerge(result, unflattened, hierarchy, rowContext, mergeState, forcedArrayFields, row);
+				this.contextAwareMerge(
+					result,
+					unflattened,
+					hierarchy,
+					rowContext,
+					mergeState,
+					forcedArrayFields,
+					arraySuffix,
+					row
+				);
 			}
 		}
 
@@ -500,7 +506,8 @@ export class NestedJsonConverter {
 		path: string,
 		hierarchy: ForcedArrayHierarchy,
 		mergeState: MergeState,
-		forcedArrayFields: Set<string>
+		forcedArrayFields: Set<string>,
+		arraySuffix: string
 	): void {
 		for (const key of Object.keys(source)) {
 			const currentPath = path ? `${path}.${key}` : key;
@@ -541,11 +548,12 @@ export class NestedJsonConverter {
 					currentPath,
 					hierarchy,
 					mergeState,
-					forcedArrayFields
+					forcedArrayFields,
+					arraySuffix
 				);
 			} else {
-				// Collision - use standard merge behavior
-				this.deepMerge(target, { [key]: sourceValue });
+				// Collision on a non-forced path - throw (arrays require the `[]` suffix).
+				this.deepMerge(target, { [key]: sourceValue }, arraySuffix, path);
 			}
 		}
 	}
@@ -590,6 +598,7 @@ export class NestedJsonConverter {
 		rowContext: RowContext,
 		mergeState: MergeState,
 		forcedArrayFields: Set<string>,
+		arraySuffix: string,
 		flatRow: TransformedRecord
 	): void {
 		// Determine which array paths need new items vs append to existing
@@ -633,7 +642,8 @@ export class NestedJsonConverter {
 			appendToExistingAt,
 			mergeState,
 			hierarchy,
-			forcedArrayFields
+			forcedArrayFields,
+			arraySuffix
 		);
 	}
 
@@ -705,7 +715,8 @@ export class NestedJsonConverter {
 		appendToExistingAt: Set<string>,
 		mergeState: MergeState,
 		hierarchy: ForcedArrayHierarchy,
-		forcedArrayFields: Set<string>
+		forcedArrayFields: Set<string>,
+		arraySuffix: string
 	): void {
 		// Handle arrays that need new items (from shallowest to deepest)
 		for (const arrayPath of hierarchy.sortedByDepth) {
@@ -786,7 +797,7 @@ export class NestedJsonConverter {
 					if (lastItem && typeof lastItem === "object" && !Array.isArray(lastItem)) {
 						// Merge into the last item
 						if (typeof sourceData === "object" && !Array.isArray(sourceData)) {
-							this.deepMerge(lastItem as NestedObject, sourceData as NestedObject);
+							this.deepMerge(lastItem as NestedObject, sourceData as NestedObject, arraySuffix, arrayPath);
 						}
 					} else {
 						// No last item or last item is not an object - just add
@@ -797,19 +808,24 @@ export class NestedJsonConverter {
 		}
 
 		// Handle non-array fields that weren't part of forced arrays
-		this.mergeNonArrayFields(target, source, forcedArrayFields);
+		this.mergeNonArrayFields(target, source, forcedArrayFields, arraySuffix);
 	}
 
 	/**
 	 * Merge fields that are not part of forced arrays.
-	 * Uses deepMerge for proper collision detection and auto-array creation.
+	 * Uses deepMerge, which throws on a genuine non-forced collision.
 	 */
-	private static mergeNonArrayFields(target: NestedObject, source: NestedObject, forcedArrayFields: Set<string>): void {
+	private static mergeNonArrayFields(
+		target: NestedObject,
+		source: NestedObject,
+		forcedArrayFields: Set<string>,
+		arraySuffix: string
+	): void {
 		// Filter source to only include paths not under forced array fields
 		const filteredSource = this.filterForcedArrayPaths(source, forcedArrayFields, "");
 
 		if (Object.keys(filteredSource).length > 0) {
-			this.deepMerge(target, filteredSource);
+			this.deepMerge(target, filteredSource, arraySuffix);
 		}
 	}
 
@@ -968,17 +984,27 @@ export class NestedJsonConverter {
 		return value === "" || value === undefined || value === null || isQuotedEmptyCell(value);
 	}
 
-	private static deepMerge(target: NestedObject, source: NestedObject): void {
+	/**
+	 * Merge `source` into `target` for non-forced (`[]`) fields.
+	 *
+	 * Arrays are never created here: automatic array grouping was removed, so arrays only
+	 * come from the forced-array (`[]`) path. Two plain objects are merged recursively.
+	 * Any other overlap where the existing leaf already holds a real value is a genuine
+	 * collision and throws {@link CsvParseError} — the caller must add the array suffix to
+	 * collect repeated values into an array. Overwriting an empty/undefined leaf is allowed
+	 * so that sparse continuation rows can fill in blanks.
+	 */
+	private static deepMerge(target: NestedObject, source: NestedObject, arraySuffix: string, path: string = ""): void {
 		for (const key of Object.keys(source)) {
 			const sourceValue = source[key];
 			const targetValue = target[key];
+			const currentPath = path ? `${path}.${key}` : key;
 
-			if (!(key in target)) {
-				// Key doesn't exist in target, just assign it
+			if (!(key in target) || this.isEffectivelyEmptyValue(targetValue)) {
+				// Key absent, or existing leaf is empty - assign (fills blanks from continuation rows).
 				target[key] = sourceValue;
-			} else if (Array.isArray(targetValue)) {
-				// Target is already an array, append the new value
-				(targetValue as NestedValue[]).push(sourceValue);
+			} else if (this.isEffectivelyEmptyValue(sourceValue)) {
+				// Nothing meaningful to merge in - keep the existing value.
 			} else if (
 				typeof targetValue === "object" &&
 				targetValue !== null &&
@@ -989,123 +1015,16 @@ export class NestedJsonConverter {
 				!Array.isArray(sourceValue) &&
 				!(sourceValue instanceof Date)
 			) {
-				// Both are plain objects (not Date) - check if we should create array of objects
-				// or recursively merge
-				const shouldCreateArray = this.shouldCreateArrayOfObjects(
-					targetValue as NestedObject,
-					sourceValue as NestedObject
-				);
-
-				if (shouldCreateArray) {
-					// Convert to array of objects
-					target[key] = [targetValue, sourceValue];
-				} else {
-					// Recursively merge the nested objects
-					this.deepMerge(targetValue as NestedObject, sourceValue as NestedObject);
-				}
+				// Both are plain objects - recurse.
+				this.deepMerge(targetValue as NestedObject, sourceValue as NestedObject, arraySuffix, currentPath);
 			} else {
-				// Collision detected at this level: convert to array
-				target[key] = [targetValue, sourceValue];
+				// Genuine collision: the same non-forced path has values in multiple rows.
+				throw new CsvParseError(
+					`Column path '${currentPath}' has multiple values within a single group. ` +
+						`Add the array suffix ('${arraySuffix}') to the header to collect repeated values into an array.`
+				);
 			}
 		}
-	}
-
-	private static checkIfAllKeysCollide(obj1: NestedObject, obj2: NestedObject): boolean {
-		// Check if ALL overlapping keys would result in collisions (non-mergeable values).
-		// Returns true only if every overlapping key has primitives/arrays that can't be merged.
-
-		const keys1 = Object.keys(obj1);
-		const keys2 = Object.keys(obj2);
-
-		// Get overlapping keys
-		const overlapping = keys2.filter(k => keys1.includes(k));
-
-		if (overlapping.length === 0) return false;
-
-		// Check each overlapping key
-		for (const key of overlapping) {
-			const val1 = obj1[key];
-			const val2 = obj2[key];
-
-			const isObj1 = typeof val1 === "object" && val1 !== null && !Array.isArray(val1);
-			const isObj2 = typeof val2 === "object" && val2 !== null && !Array.isArray(val2);
-
-			// If both are plain objects, this key could be merged (not a collision)
-			if (isObj1 && isObj2) {
-				return false; // Not ALL keys would collide
-			}
-			// If at least one is not an object, this key would collide
-			// Continue checking other keys
-		}
-
-		// All overlapping keys have non-object values, so all would collide
-		return true;
-	}
-
-	private static shouldCreateArrayOfObjects(obj1: NestedObject, obj2: NestedObject): boolean {
-		// Create an array of objects at this level if:
-		// 1. There's an immediate collision (overlapping keys with non-object values), OR
-		// 2. All overlapping nested object keys would result in primitive collisions
-		//    (indicating these are two distinct records, not mergeable structures)
-
-		const keys1 = new Set(Object.keys(obj1));
-		const keys2 = new Set(Object.keys(obj2));
-
-		let hasNestedObjects = false;
-		let allNestedWouldCollide = true;
-
-		for (const key of keys2) {
-			if (keys1.has(key)) {
-				const val1 = obj1[key];
-				const val2 = obj2[key];
-
-				const isObj1 = typeof val1 === "object" && val1 !== null && !Array.isArray(val1);
-				const isObj2 = typeof val2 === "object" && val2 !== null && !Array.isArray(val2);
-
-				// If at least one is NOT a plain object, we have an immediate collision
-				if (!isObj1 || !isObj2) {
-					return true;
-				}
-
-				// Both are objects - check if they would collide when merged
-				hasNestedObjects = true;
-				if (!this.checkIfAllKeysCollide(val1 as NestedObject, val2 as NestedObject)) {
-					allNestedWouldCollide = false;
-				}
-			}
-		}
-
-		// If we have nested objects and ALL of them would result in primitive collisions,
-		// then we should create array at this level to preserve the record structure
-		return hasNestedObjects && allNestedWouldCollide;
-	}
-
-	private static detectArrayFields(groups: NestedObject[]): Set<string> {
-		const arrayFields = new Set<string>();
-
-		const checkForArrays = (obj: NestedObject, path: string = "") => {
-			for (const [key, value] of Object.entries(obj)) {
-				const currentPath = path ? `${path}.${key}` : key;
-
-				if (Array.isArray(value)) {
-					arrayFields.add(currentPath);
-					// Recursively check array elements for nested arrays
-					for (const item of value) {
-						if (item && typeof item === "object" && !Array.isArray(item)) {
-							checkForArrays(item as NestedObject, currentPath);
-						}
-					}
-				} else if (value && typeof value === "object" && !(value instanceof Date)) {
-					checkForArrays(value as NestedObject, currentPath);
-				}
-			}
-		};
-
-		for (const group of groups) {
-			checkForArrays(group);
-		}
-
-		return arrayFields;
 	}
 
 	private static normalizeArrays(
