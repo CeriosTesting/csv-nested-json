@@ -158,8 +158,8 @@ describe("Column Selection/Exclusion", () => {
 			const result = NestedJsonConverter.convert(records, {});
 
 			expect(result.length).toBe(2);
-			expect(result[0].id).toBe("1");
-			expect(result[1].id).toBe("2");
+			expect(result[0].id).toBe(1);
+			expect(result[1].id).toBe(2);
 		});
 
 		it("should throw when identifierColumn is missing", () => {
@@ -214,7 +214,7 @@ describe("Column Selection/Exclusion", () => {
 				results.push(record as NestedObject);
 			}
 
-			expect(results[0]).toEqual({ id: "1", name: "John" });
+			expect(results[0]).toEqual({ id: 1, name: "John" });
 		});
 
 		it("should support excludeColumns in streaming parser", async () => {
@@ -229,7 +229,7 @@ describe("Column Selection/Exclusion", () => {
 				results.push(record as NestedObject);
 			}
 
-			expect(results[0]).toEqual({ id: "1", name: "John" });
+			expect(results[0]).toEqual({ id: 1, name: "John" });
 		});
 
 		it("should warn for missing includeColumns in streaming parser", async () => {
@@ -263,36 +263,6 @@ describe("Column Selection/Exclusion", () => {
 		});
 	});
 
-	describe("column selection with headerTransformer", () => {
-		it("should filter based on original header names, not transformed names", () => {
-			const csv = "User ID,User Name,Email\n1,John,john@test.com";
-			const result = CsvReader.parse(csv, {
-				headerTransformer: (h: string) => h.toLowerCase().replace(" ", "_"),
-				includeColumns: ["User ID", "User Name"],
-			});
-
-			expect(result[0]).toEqual({ user_id: "1", user_name: "John" });
-		});
-
-		it("should require transformed identifierColumn name in streaming parser", async () => {
-			const csv = "User ID,values[]\n1,a\n,b";
-
-			await expect(
-				CsvStreamParser.parseStream(Readable.from([csv]), {
-					headerTransformer: (h: string) => h.toLowerCase().replace(" ", "_"),
-					identifierColumn: "User ID",
-				})
-			).rejects.toThrow("identifierColumn 'User ID' not found in headers");
-
-			const result = await CsvStreamParser.parseStream(Readable.from([csv]), {
-				headerTransformer: (h: string) => h.toLowerCase().replace(" ", "_"),
-				identifierColumn: "user_id",
-			});
-
-			expect(result).toEqual([{ user_id: "1", values: ["a", "b"] }]);
-		});
-	});
-
 	describe("column selection with columnMapping", () => {
 		it("should filter based on original headers when columnMapping is applied", () => {
 			const csv = "id,firstName,lastName\n1,John,Doe";
@@ -319,7 +289,7 @@ describe("Column Selection/Exclusion", () => {
 				identifierColumn: "recordId",
 			});
 
-			expect(result).toEqual([{ recordId: "1", values: ["a", "b"] }]);
+			expect(result).toEqual([{ recordId: 1, values: ["a", "b"] }]);
 		});
 	});
 

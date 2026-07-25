@@ -10,6 +10,7 @@ import {
 	unflattenRecord,
 } from "./record-transform";
 import type {
+	CsvErrorSink,
 	CsvParserOptions,
 	CsvRecord,
 	ForcedArrayHierarchy,
@@ -76,7 +77,11 @@ export class NestedJsonConverter {
 	 * // [{ id: 1, active: true, score: 95.5 }]
 	 * ```
 	 */
-	static convert(records: ConvertibleCsvRecord[], options: CsvParserOptions = {}): NestedObject[] {
+	static convert(
+		records: ConvertibleCsvRecord[],
+		options: CsvParserOptions = {},
+		errorSink?: CsvErrorSink
+	): NestedObject[] {
 		if (records.length === 0) return [];
 
 		const arraySuffix = options.arraySuffixIndicator ?? "[]";
@@ -140,9 +145,13 @@ export class NestedJsonConverter {
 
 		const identifierColumn = configuredIdentifier ?? availableColumns[0];
 
-		// Group by the identifier column
+		// Group by the identifier column. `groupStartRows` tracks the 1-based row where each group's
+		// base row appeared, so a grouping error surfaced during per-group processing can be attributed
+		// to a concrete row in `*Safe` mode.
 		const groups: TransformedRecord[][] = [];
+		const groupStartRows: number[] = [];
 		let currentGroup: TransformedRecord[] = [];
+		let currentGroupStartRow = 0;
 
 		for (let rowIndex = 0; rowIndex < transformedRecords.length; rowIndex++) {
 			const row = transformedRecords[rowIndex];
@@ -153,13 +162,19 @@ export class NestedJsonConverter {
 			if (hasIdentifierValue) {
 				if (currentGroup.length > 0) {
 					groups.push(currentGroup);
+					groupStartRows.push(currentGroupStartRow);
 				}
 				currentGroup = [row];
+				currentGroupStartRow = rowIndex + 1;
 			} else {
 				if (currentGroup.length === 0) {
-					throw new CsvParseError(
-						`Row ${rowIndex + 1} is a continuation row, but no base row exists. Column '${identifierColumn}' must have a value to start a group.`
-					);
+					const message = `Row ${rowIndex + 1} is a continuation row, but no base row exists. Column '${identifierColumn}' must have a value to start a group.`;
+					// In `*Safe` mode, collect and skip the orphan continuation row instead of aborting.
+					if (errorSink) {
+						errorSink({ row: rowIndex + 1, code: "grouping", message });
+						continue;
+					}
+					throw new CsvParseError(message);
 				}
 
 				// Continuation rows should never overwrite the grouping identifier value.
@@ -172,6 +187,7 @@ export class NestedJsonConverter {
 		}
 		if (currentGroup.length > 0) {
 			groups.push(currentGroup);
+			groupStartRows.push(currentGroupStartRow);
 		}
 
 		// Apply offset + limit (both count output records, i.e. groups). A partially buffered
@@ -180,8 +196,10 @@ export class NestedJsonConverter {
 		const limit = options.limit;
 		const offset = options.offset && options.offset > 0 ? options.offset : 0;
 		const hasLimit = limit !== undefined && limit > 0;
-		const limitedGroups =
-			offset > 0 || hasLimit ? groups.slice(offset, hasLimit ? offset + (limit as number) : undefined) : groups;
+		const windowEnd = hasLimit ? offset + (limit as number) : undefined;
+		const hasWindow = offset > 0 || hasLimit;
+		const limitedGroups = hasWindow ? groups.slice(offset, windowEnd) : groups;
+		const limitedGroupStartRows = hasWindow ? groupStartRows.slice(offset, windowEnd) : groupStartRows;
 
 		// Precompute the unflatten path plan once for the constant header set, so unflattening each
 		// row reuses the split segments instead of re-splitting every key of every row. The plan
@@ -194,14 +212,42 @@ export class NestedJsonConverter {
 		// Process all groups with hierarchy-aware merging. Arrays are created ONLY for
 		// forced array fields (`[]` suffix). A repeated non-forced path within a group is
 		// treated as an error rather than being silently promoted to an array.
-		const processedGroups = limitedGroups.map(group =>
-			this.processGroupWithHierarchy(group, hierarchy, forcedArrayFields, arraySuffix, options, unflattenPlan)
-		);
-
-		// Normalize all groups so forced array fields are consistently arrays.
-		return processedGroups.map(group =>
-			this.normalizeArrays(group, forcedArrayFields, forcedArrayFields, emptyArrayBehavior)
-		);
+		//
+		// In `*Safe` mode, a group whose processing throws is collected as a grouping error and
+		// omitted from the output rather than aborting the whole parse.
+		const result: NestedObject[] = [];
+		for (let g = 0; g < limitedGroups.length; g++) {
+			if (errorSink) {
+				try {
+					const processed = this.processGroupWithHierarchy(
+						limitedGroups[g],
+						hierarchy,
+						forcedArrayFields,
+						arraySuffix,
+						options,
+						unflattenPlan
+					);
+					result.push(this.normalizeArrays(processed, forcedArrayFields, forcedArrayFields, emptyArrayBehavior));
+				} catch (error) {
+					if (error instanceof CsvParseError) {
+						errorSink({ row: limitedGroupStartRows[g], code: "grouping", message: error.message });
+						continue;
+					}
+					throw error;
+				}
+			} else {
+				const processed = this.processGroupWithHierarchy(
+					limitedGroups[g],
+					hierarchy,
+					forcedArrayFields,
+					arraySuffix,
+					options,
+					unflattenPlan
+				);
+				result.push(this.normalizeArrays(processed, forcedArrayFields, forcedArrayFields, emptyArrayBehavior));
+			}
+		}
+		return result;
 	}
 
 	private static hasIdentifierValue(value: TransformedRecordValue): boolean {
@@ -214,7 +260,7 @@ export class NestedJsonConverter {
 
 	/**
 	 * Normalize headers and apply value transformations in a single pass.
-	 * Transformation order: nullValues → autoParseNumbers → autoParseBooleans → valueTransformer.
+	 * Transformation order: nullValues → autoParseNumbers → autoParseBooleans.
 	 *
 	 * Delegates to the shared {@link transformRecordValues} (passing the key normalizer so array
 	 * suffixes are stripped in the same pass) so the buffered and streaming paths stay in lockstep.

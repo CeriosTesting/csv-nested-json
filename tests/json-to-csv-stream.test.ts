@@ -55,7 +55,7 @@ describe("JsonToCsvStream", () => {
 		const records: NestedObject[] = [{ id: "1", tags: ["a", "b", "c"] }];
 		const csv = await streamToCsv(records);
 		expect(csv).toBe("id,tags[]\n1,a\n,b\n,c");
-		expect(CsvParser.parseString(csv)).toEqual(records);
+		expect(CsvParser.parseString(csv, { autoParseNumbers: false, autoParseBooleans: false })).toEqual(records);
 	});
 
 	it("applies nullValue for explicit nulls", async () => {

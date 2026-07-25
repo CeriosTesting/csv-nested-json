@@ -26,17 +26,17 @@ export { NestedJsonConverter } from "./nested-json-converter";
 // Types
 export type {
 	ArrayMode,
+	CsvParseResult,
 	CsvParserOptions,
 	CsvRecord,
+	CsvRowError,
+	CsvRowErrorCode,
 	DuplicateHeaderStrategy,
 	EmptyArrayBehavior,
-	HeaderTransformer,
 	NestedObject,
 	NestedValue,
 	NullRepresentation,
 	ProgressCallback,
 	ProgressInfo,
-	RowFilter,
 	ValidationMode,
-	ValueTransformer,
 } from "./types";

@@ -146,7 +146,7 @@ describe("Gap fixes", () => {
 			const records = await collectStream(`a,b\nfoo"bar,baz\n1,2`);
 			expect(records).toEqual([
 				{ a: 'foo"bar', b: "baz" },
-				{ a: "1", b: "2" },
+				{ a: 1, b: 2 },
 			]);
 		});
 
@@ -178,9 +178,9 @@ describe("Gap fixes", () => {
 		});
 
 		it("still accepts valid single-character delimiters (tab, pipe, semicolon)", () => {
-			expect(CsvParser.parseString("a\tb\n1\t2", { delimiter: "\t" })).toEqual([{ a: "1", b: "2" }]);
-			expect(CsvParser.parseString("a|b\n1|2", { delimiter: "|" })).toEqual([{ a: "1", b: "2" }]);
-			expect(CsvParser.parseString("a;b\n1;2", { delimiter: ";" })).toEqual([{ a: "1", b: "2" }]);
+			expect(CsvParser.parseString("a\tb\n1\t2", { delimiter: "\t" })).toEqual([{ a: 1, b: 2 }]);
+			expect(CsvParser.parseString("a|b\n1|2", { delimiter: "|" })).toEqual([{ a: 1, b: 2 }]);
+			expect(CsvParser.parseString("a;b\n1;2", { delimiter: ";" })).toEqual([{ a: 1, b: 2 }]);
 		});
 	});
 
@@ -193,7 +193,7 @@ describe("Gap fixes", () => {
 
 		it("stays lenient (pads with empty) in default 'warn' mode", () => {
 			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-			expect(CsvParser.parseString(csvShort)).toEqual([{ a: "1", b: "2" }]);
+			expect(CsvParser.parseString(csvShort)).toEqual([{ a: 1, b: 2 }]);
 			warnSpy.mockRestore();
 		});
 
@@ -206,8 +206,8 @@ describe("Gap fixes", () => {
 		it("skips comment lines interspersed with data (buffered)", () => {
 			const csv = `# top comment\nid,name\n1,Alice\n# mid comment\n2,Bob`;
 			expect(CsvParser.parseString(csv, { commentPrefix: "#" })).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
 			]);
 		});
 
@@ -215,8 +215,8 @@ describe("Gap fixes", () => {
 			const csv = `# top\nid,name\n1,Alice\n#skip me\n2,Bob`;
 			const records = await collectStream(csv, { commentPrefix: "#" });
 			expect(records).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
 			]);
 		});
 
@@ -233,7 +233,7 @@ describe("Gap fixes", () => {
 
 		it("does not treat a '#' inside a quoted field as a comment", () => {
 			const csv = `a,b\n"# not a comment",2`;
-			expect(CsvParser.parseString(csv, { commentPrefix: "#" })).toEqual([{ a: "# not a comment", b: "2" }]);
+			expect(CsvParser.parseString(csv, { commentPrefix: "#" })).toEqual([{ a: "# not a comment", b: 2 }]);
 		});
 	});
 
@@ -253,7 +253,7 @@ describe("Gap fixes", () => {
 				{ id: "2", tags: ["c"] },
 			];
 			const csv = await streamToCsv(records);
-			expect(CsvParser.parseString(csv)).toEqual(records);
+			expect(CsvParser.parseString(csv, { autoParseNumbers: false, autoParseBooleans: false })).toEqual(records);
 		});
 
 		it("honors explicit columns and can omit the header row", async () => {

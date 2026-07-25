@@ -20,16 +20,16 @@ describe("offset (pagination)", () => {
 
 	it("skips the first N output records (buffered)", () => {
 		expect(CsvParser.parseString(csv, { offset: 2 })).toEqual([
-			{ id: "3", name: "c" },
-			{ id: "4", name: "d" },
-			{ id: "5", name: "e" },
+			{ id: 3, name: "c" },
+			{ id: 4, name: "d" },
+			{ id: 5, name: "e" },
 		]);
 	});
 
 	it("composes offset + limit into a window (buffered)", () => {
 		expect(CsvParser.parseString(csv, { offset: 1, limit: 2 })).toEqual([
-			{ id: "2", name: "b" },
-			{ id: "3", name: "c" },
+			{ id: 2, name: "b" },
+			{ id: 3, name: "c" },
 		]);
 	});
 
@@ -45,8 +45,8 @@ describe("offset (pagination)", () => {
 	it("counts grouped output records, not raw rows (offset with continuation rows)", () => {
 		const grouped = `id,tags[]\n1,a\n,b\n2,c\n3,d`;
 		expect(CsvParser.parseString(grouped, { offset: 1 })).toEqual([
-			{ id: "2", tags: ["c"] },
-			{ id: "3", tags: ["d"] },
+			{ id: 2, tags: ["c"] },
+			{ id: 3, tags: ["d"] },
 		]);
 	});
 

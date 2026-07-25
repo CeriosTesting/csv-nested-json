@@ -18,7 +18,7 @@ import {
 	transformRecordValues,
 	unflattenRecord,
 } from "./record-transform";
-import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, NestedObject, ProgressCallback } from "./types";
+import type { CsvParserOptions, DuplicateHeaderStrategy, NestedObject, ProgressCallback } from "./types";
 
 /**
  * Options for the streaming CSV parser.
@@ -573,13 +573,8 @@ export class CsvStreamParser extends Transform {
 			const { filteredHeaders: filteredOriginalHeaders, includedIndices } = this.filterColumns(originalHeaders);
 			this.includedIndices = includedIndices;
 
-			// Apply header transformer if specified
+			// Apply column mapping if specified (based on the raw/filtered header names)
 			let headers = filteredOriginalHeaders;
-			if (this.options.headerTransformer) {
-				headers = headers.map(this.options.headerTransformer);
-			}
-
-			// Apply column mapping if specified (based on transformed header names)
 			if (this.options.columnMapping) {
 				headers = headers.map(h => this.options.columnMapping?.[h] ?? h);
 			}
@@ -622,12 +617,6 @@ export class CsvStreamParser extends Transform {
 
 		// Create record from values
 		const record = this.createRecord(values);
-
-		// Apply row filter if specified
-		if (this.options.rowFilter && !this.options.rowFilter(this.toPublicRecord(record), this.dataRowIndex)) {
-			this.dataRowIndex++;
-			return;
-		}
 		this.dataRowIndex++;
 
 		if (this.shouldGroupContinuationRows()) {
@@ -885,12 +874,7 @@ export class CsvStreamParser extends Transform {
 		for (let i = 0; i < this.headers.length; i++) {
 			// Get the original column index for this filtered header
 			const originalIndex = this.includedIndices[i];
-			let value: InternalCsvCellValue = originalIndex < values.length ? values[originalIndex] : "";
-
-			// Apply default value if cell is empty
-			if (isEmptyCsvCellValue(value) && this.options.defaultValues?.[this.headers[i]] !== undefined) {
-				value = this.options.defaultValues[this.headers[i]];
-			}
+			const value: InternalCsvCellValue = originalIndex < values.length ? values[originalIndex] : "";
 
 			const header = this.headers[i];
 
@@ -924,16 +908,6 @@ export class CsvStreamParser extends Transform {
 			}
 		}
 		return record;
-	}
-
-	private toPublicRecord(record: InternalCsvRecord): CsvRecord {
-		const publicRecord: CsvRecord = {};
-
-		for (const header of Object.keys(record)) {
-			publicRecord[header] = toPublicCsvCellValue(record[header]);
-		}
-
-		return publicRecord;
 	}
 
 	/**

@@ -25,7 +25,7 @@ describe("JsonToCsv output options", () => {
 		it("honors the array suffix in explicit columns for round-trippable arrays", () => {
 			const csv = JsonToCsv.stringify([{ id: "1", tags: ["x", "y"] }], { columns: ["id", "tags[]"] });
 			expect(csv).toBe("id,tags[]\n1,x\n,y");
-			expect(CsvParser.parseString(csv)).toEqual([{ id: "1", tags: ["x", "y"] }]);
+			expect(CsvParser.parseString(csv)).toEqual([{ id: 1, tags: ["x", "y"] }]);
 		});
 	});
 
@@ -63,7 +63,7 @@ describe("JsonToCsv output options", () => {
 
 		it("re-parses cleanly because the parser strips the BOM by default", () => {
 			const csv = JsonToCsv.stringify([{ a: "1" }], { writeBom: true });
-			expect(CsvParser.parseString(csv)).toEqual([{ a: "1" }]);
+			expect(CsvParser.parseString(csv)).toEqual([{ a: 1 }]);
 		});
 	});
 
@@ -89,7 +89,12 @@ describe("JsonToCsv output options", () => {
 
 		it("parse(stringify(x)) reproduces x in rows array mode with a null token", () => {
 			const csv = JsonToCsv.stringify(records, { nullValue: "\\N" });
-			const parsed = CsvParser.parseString(csv, { nullValues: ["\\N"], nullRepresentation: "null" });
+			const parsed = CsvParser.parseString(csv, {
+				nullValues: ["\\N"],
+				nullRepresentation: "null",
+				autoParseNumbers: false,
+				autoParseBooleans: false,
+			});
 			expect(parsed).toEqual(records);
 		});
 
@@ -97,7 +102,12 @@ describe("JsonToCsv output options", () => {
 			const columns = ["id", "note", "person.name", "person.city", "tags[]"];
 			const csv = JsonToCsv.stringify(records, { columns, nullValue: "\\N" });
 			expect(csv.split("\n")[0]).toBe(columns.join(","));
-			const parsed = CsvParser.parseString(csv, { nullValues: ["\\N"], nullRepresentation: "null" });
+			const parsed = CsvParser.parseString(csv, {
+				nullValues: ["\\N"],
+				nullRepresentation: "null",
+				autoParseNumbers: false,
+				autoParseBooleans: false,
+			});
 			expect(parsed).toEqual(records);
 		});
 	});

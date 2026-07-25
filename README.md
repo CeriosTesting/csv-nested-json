@@ -16,9 +16,10 @@ A powerful TypeScript CSV parser that transforms flat CSV data into nested JSON 
 - **Limit Records** - Stop parsing after N records for previews or pagination
 - **Progress Monitoring** - Track parsing progress with callbacks for large files
 - **Batch Processing** - Process records in configurable batches for memory efficiency
-- **Value Transformations** - Auto-parse numbers and booleans, or use custom transformers
-- **Header Transformations** - Transform and map column names
-- **Row Filtering** - Filter rows during parsing for memory efficiency
+- **Automatic Type Coercion** - Numbers and booleans are parsed by default (opt out per flag)
+- **Error Accumulation** - `*Safe` methods collect per-row errors instead of throwing on the first
+- **Column Mapping** - Rename columns to new keys
+- **Null Handling** - Map configurable tokens to `null`/`undefined`/empty/omitted
 - **RFC 4180 Aligned** - Handles quoted fields, escaped quotes, field-start quoting, and various line endings
 - **Flexible Delimiters** - Any single character: comma, semicolon, tab, pipe, and more
 - **Custom Encodings** - Handle different file encodings (UTF-8, Latin1, etc.)
@@ -65,6 +66,10 @@ console.log(result);
 | `CsvParser.parseFile()`         | Parse CSV file asynchronously                                   |
 | `CsvParser.parseString()`       | Parse CSV string content                                        |
 | `CsvParser.parseStream()`       | Parse CSV from readable stream (buffers full content in memory) |
+| `CsvParser.parseStringSafe()`   | Parse a string, collecting per-row errors as `{ data, errors }` |
+| `CsvParser.parseFileSyncSafe()` | Parse a file (sync), collecting per-row errors                  |
+| `CsvParser.parseFileSafe()`     | Parse a file (async), collecting per-row errors                 |
+| `CsvParser.parseStreamSafe()`   | Parse a stream (buffered), collecting per-row errors            |
 | `CsvStreamParser`               | True streaming parser for very large files                      |
 | `CsvReader.parse()`             | Low-level CSV parser that returns flat records                  |
 | `CsvFileReader.readFile*()`     | Low-level file/stream text reader                               |
@@ -407,23 +412,29 @@ const result = CsvParser.parseString(csvContent);
 ]
 ```
 
-### Auto-Parse Numbers and Booleans
+### Automatic Type Coercion (Numbers and Booleans)
+
+Number and boolean parsing are **on by default**. Pass `false` to keep raw strings.
 
 ```typescript
 const csvContent = `id,name,age,price,active,verified
 1,Alice,30,19.99,true,FALSE
 2,Bob,25,29.99,false,TRUE`;
 
-const result = CsvParser.parseString(csvContent, {
-	autoParseNumbers: true,
-	autoParseBooleans: true,
-});
+// Coercion happens automatically — no options needed:
+const result = CsvParser.parseString(csvContent);
 
 // Result:
 // [
 //   { id: 1, name: "Alice", age: 30, price: 19.99, active: true, verified: false },
 //   { id: 2, name: "Bob", age: 25, price: 29.99, active: false, verified: true }
 // ]
+
+// Disable to keep every value as a string:
+const raw = CsvParser.parseString(csvContent, {
+	autoParseNumbers: false,
+	autoParseBooleans: false,
+});
 ```
 
 **Note:** Strings with leading zeros (like `"007"`) are preserved as strings to avoid data loss.
@@ -431,60 +442,40 @@ const result = CsvParser.parseString(csvContent, {
 ### Parsing Dates
 
 There is no built-in date option: `Date.parse` recognition is too loose and locale-dependent, so
-date-looking strings are kept as plain strings. To produce `Date` objects, use a `valueTransformer`:
+date-looking strings are kept as plain strings. Convert them yourself after parsing:
 
 ```typescript
 const csvContent = `id,name,createdAt
 1,Alice,2024-01-15`;
 
-const result = CsvParser.parseString(csvContent, {
-	valueTransformer: (value, header) => (header === "createdAt" && typeof value === "string" ? new Date(value) : value),
-});
+const parsed = CsvParser.parseString(csvContent);
+const withDates = parsed.map(r => ({ ...r, createdAt: new Date(r.createdAt as string) }));
 
-// Result:
-// [{ id: "1", name: "Alice", createdAt: Date("2024-01-15") }]
+// [{ id: 1, name: "Alice", createdAt: Date("2024-01-15") }]
 ```
 
-### Custom Value Transformer
+### Error Accumulation (`*Safe` methods)
+
+Every buffered entry point has a `*Safe` counterpart that returns `{ data, errors }` instead of
+throwing on the first bad row. `data` holds the records that parsed successfully; `errors` lists each
+row/group that failed. This is ideal for validating an uploaded file in a single pass.
 
 ```typescript
-const csvContent = `id,name,email
-1,alice,alice@example.com
-2,bob,bob@example.com`;
-
-const result = CsvParser.parseString(csvContent, {
-	valueTransformer: (value, header) => {
-		// Uppercase names
-		if (header === "name" && typeof value === "string") {
-			return value.toUpperCase();
-		}
-		return value;
-	},
+const { data, errors } = CsvParser.parseStringSafe("a,b\n1,2\n1,2,3\n4,5", {
+	validationMode: "error",
 });
 
-// Result:
-// [
-//   { id: "1", name: "ALICE", email: "alice@example.com" },
-//   { id: "2", name: "BOB", email: "bob@example.com" }
-// ]
+// data:   [{ a: 1, b: 2 }, { a: 4, b: 5 }]
+// errors: [{ row: 3, column: 3, code: "validation", message: "..." }]
 ```
 
-### Header Transformation
+Recoverable errors are per-row: `code: "validation"` (a row's column count does not match the
+header, in `validationMode: "error"`) and `code: "grouping"` (a continuation/array grouping problem,
+such as a repeated non-`[]` path within a group). Configuration and I/O problems (invalid
+delimiter/quote, unsupported encoding, missing file) are **not** per-row and still throw.
 
-```typescript
-const csvContent = `User ID,First Name,Last Name,Email Address
-1,John,Doe,john@example.com`;
-
-const result = CsvParser.parseString(csvContent, {
-	// Convert headers to camelCase
-	headerTransformer: header => {
-		return header.toLowerCase().replace(/\s+(.)/g, (_, c) => c.toUpperCase());
-	},
-});
-
-// Result:
-// [{ userId: "1", firstName: "John", lastName: "Doe", emailAddress: "john@example.com" }]
-```
+Available as `parseStringSafe`, `parseFileSyncSafe`, `parseFileSafe`, and `parseStreamSafe`
+(the streaming `CsvStreamParser` is unaffected and still throws / emits `'error'`).
 
 ### Column Mapping
 
@@ -502,31 +493,6 @@ const result = CsvParser.parseString(csvContent, {
 
 // Result:
 // [{ id: "1", firstName: "John", lastName: "Doe" }]
-```
-
-### Row Filtering
-
-Filter rows during parsing for better memory efficiency:
-
-```typescript
-const csvContent = `id,name,status
-1,Alice,active
-2,Bob,deleted
-3,Charlie,active
-4,Diana,pending`;
-
-const result = CsvParser.parseString(csvContent, {
-	rowFilter: (record, rowIndex) => {
-		// Only include active records
-		return record.status === "active";
-	},
-});
-
-// Result:
-// [
-//   { id: "1", name: "Alice", status: "active" },
-//   { id: "3", name: "Charlie", status: "active" }
-// ]
 ```
 
 ### Column Selection
@@ -629,27 +595,6 @@ const result = CsvParser.parseString(csvContent, {
 // ]
 ```
 
-### Default Values
-
-```typescript
-const csvContent = `id,name,status,country
-1,Alice,,
-2,Bob,active,USA`;
-
-const result = CsvParser.parseString(csvContent, {
-	defaultValues: {
-		status: "pending",
-		country: "Unknown",
-	},
-});
-
-// Result:
-// [
-//   { id: "1", name: "Alice", status: "pending", country: "Unknown" },
-//   { id: "2", name: "Bob", status: "active", country: "USA" }
-// ]
-```
-
 ### Empty Value Preservation
 
 By default, unquoted empty values are omitted and explicitly quoted empty values are preserved. You can control each case independently.
@@ -681,10 +626,9 @@ const preserveBoth = CsvParser.parseString(csvContent, {
 
 When multiple options apply, precedence is:
 
-1. `defaultValues`
-2. `nullValues` + `nullRepresentation`
-3. `preserveEmptyColumnAsEmptyString` / `preserveEmptyString`
-4. Omit
+1. `nullValues` + `nullRepresentation`
+2. `preserveEmptyColumnAsEmptyString` / `preserveEmptyString`
+3. Omit
 
 ### Null Value Handling
 
@@ -955,7 +899,6 @@ interface CsvParserOptions {
 	commentPrefix?: string; // Skip lines starting with this prefix
 	trimValues?: boolean; // Trim unquoted field values (Default: false)
 	trimLeadingSpace?: boolean; // Recognize a quote after leading spaces (Default: false)
-	rowFilter?: (record, rowIndex) => boolean; // Filter rows during parsing
 	limit?: number; // Max records to parse
 	offset?: number; // Skip N output records before collecting (applied before limit)
 
@@ -966,15 +909,13 @@ interface CsvParserOptions {
 	// Duplicate header handling
 	duplicateHeaders?: DuplicateHeaderStrategy; // Default: 'error'
 
-	// Value transformations
-	autoParseNumbers?: boolean; // Default: false
+	// Type coercion (both default: true — pass false to keep raw strings)
+	autoParseNumbers?: boolean; // Default: true
 	preserveUnsafeIntegersAsString?: boolean; // Default: false
-	autoParseBooleans?: boolean; // Default: false
-	valueTransformer?: (value, header) => any; // Custom value transformer
+	autoParseBooleans?: boolean; // Default: true
 
-	// Header transformations
-	headerTransformer?: (header) => string; // Transform header names
-	columnMapping?: Record<string, string>; // Rename columns
+	// Column renaming
+	columnMapping?: Record<string, string>; // Rename columns (keyed by raw CSV header)
 
 	// Array handling
 	arraySuffixIndicator?: string; // Default: '[]'
@@ -983,9 +924,6 @@ interface CsvParserOptions {
 	// Null handling
 	nullValues?: string[]; // Values to treat as null
 	nullRepresentation?: "null" | "undefined" | "empty-string" | "omit"; // Default: 'omit'
-
-	// Default values
-	defaultValues?: Record<string, string>; // Default values for empty cells
 
 	// Empty value preservation
 	preserveEmptyColumnAsEmptyString?: boolean; // Preserve unquoted empties: ,,
@@ -1086,7 +1024,8 @@ CsvParser.parseString(csv, { trimLeadingSpace: true });
 
 #### `autoParseNumbers`
 
-Automatically convert numeric strings to numbers. Strings with leading zeros (like `"007"`) are preserved.
+Automatically convert numeric strings to numbers. **On by default** — pass `autoParseNumbers: false`
+to keep numeric strings as-is. Strings with leading zeros (like `"007"`) are preserved.
 
 Note: JavaScript numbers lose integer precision above `Number.MAX_SAFE_INTEGER` (`9007199254740991`).
 If you want to prevent precision loss for large integers, enable `preserveUnsafeIntegersAsString`.
@@ -1106,41 +1045,15 @@ const result = CsvParser.parseString(csv, {
 
 #### `autoParseBooleans`
 
-Automatically convert `'true'`/`'false'` strings to booleans (case-insensitive).
-
-#### `valueTransformer`
-
-Custom function to transform values after parsing. Called after auto-parse options.
-
-```typescript
-valueTransformer: (value, header) => {
-	if (header === "email") return value.toLowerCase();
-	return value;
-};
-```
-
-#### `headerTransformer`
-
-Transform header names before processing. Useful for converting to camelCase, lowercase, etc.
-
-```typescript
-headerTransformer: header => header.toLowerCase().replace(/\s+/g, "_");
-```
+Automatically convert `'true'`/`'false'` strings to booleans (case-insensitive). **On by default** —
+pass `autoParseBooleans: false` to keep them as strings.
 
 #### `columnMapping`
 
-Map/rename column headers. Applied after `headerTransformer`.
+Map/rename column headers. Keyed by the raw CSV header name.
 
 ```typescript
 columnMapping: { 'user_id': 'id', 'first_name': 'firstName' }
-```
-
-#### `rowFilter`
-
-Filter rows during parsing. More memory-efficient than filtering after parsing.
-
-```typescript
-rowFilter: (record, rowIndex) => record.status === "active";
 ```
 
 #### `limit`
@@ -1155,8 +1068,8 @@ limit: 100; // Stop after 100 records
 
 Number of output records to skip before collecting results. Applied **before** `limit`, so `offset`
 and `limit` together select a window of records (useful for pagination). Like `limit`, it counts
-grouped output records (continuation-row groups map to a single record and are never split) and is
-applied after `rowFilter`. Both parsers apply it identically.
+grouped output records (continuation-row groups map to a single record and are never split). Both
+parsers apply it identically.
 
 ```typescript
 // Skip the first 100 records, then take the next 50
@@ -1172,7 +1085,7 @@ includeColumns: ["id", "name", "email"]; // Only include these columns
 ```
 
 `includeColumns` and `excludeColumns` can be combined. Inclusion is applied first, then exclusion.
-Column filtering matches original CSV header names before `headerTransformer` and `columnMapping` are applied.
+Column filtering matches original CSV header names before `columnMapping` is applied.
 
 #### `excludeColumns`
 
@@ -1202,7 +1115,7 @@ Column to use as the identifier for grouping continuation rows. By default, the 
 
 The first data row in a group must contain an identifier value. If the first row is a continuation row (empty identifier), parsing throws `CsvParseError` to avoid ambiguous grouping.
 
-If `headerTransformer` or `columnMapping` is used, set `identifierColumn` to the transformed/mapped header name (not the original CSV header).
+If `columnMapping` is used, set `identifierColumn` to the mapped header name (not the original CSV header).
 
 ```typescript
 // Use 'productId' instead of first column to group rows
@@ -1244,14 +1157,6 @@ How to represent null values in output:
 - `'undefined'`: Use JavaScript `undefined`
 - `'empty-string'`: Use empty string `''`
 
-#### `defaultValues`
-
-Default values for columns when cells are empty.
-
-```typescript
-defaultValues: { status: 'pending', country: 'Unknown' }
-```
-
 #### `preserveEmptyColumnAsEmptyString`
 
 Preserve unquoted empty columns (for example `,,`) as `''` in nested output.
@@ -1281,7 +1186,6 @@ const result = await CsvParser.parseFile("./data.csv", {
 	// Row handling
 	skipRows: 2,
 	stripBom: true,
-	rowFilter: record => record.status !== "deleted",
 	limit: 1000,
 
 	// Column selection
@@ -1290,16 +1194,11 @@ const result = await CsvParser.parseFile("./data.csv", {
 	// Duplicate header handling
 	duplicateHeaders: "rename",
 
-	// Value transformations
+	// Type coercion (both default to true; shown here for clarity)
 	autoParseNumbers: true,
 	autoParseBooleans: true,
-	valueTransformer: (value, header) => {
-		if (header === "email") return value.toLowerCase();
-		return value;
-	},
 
-	// Header transformations
-	headerTransformer: h => h.toLowerCase().replace(/\s+/g, "_"),
+	// Column renaming
 	columnMapping: { user_id: "id" },
 
 	// Row grouping
@@ -1312,9 +1211,6 @@ const result = await CsvParser.parseFile("./data.csv", {
 	// Null handling
 	nullValues: ["null", "N/A", "-"],
 	nullRepresentation: "null",
-
-	// Defaults
-	defaultValues: { status: "pending" },
 
 	// Empty value preservation
 	preserveEmptyColumnAsEmptyString: true,
@@ -1341,6 +1237,37 @@ Parses CSV string content.
 #### `parseStream<T>(stream: Readable, options?: CsvParserOptions): Promise<T[]>`
 
 Parses CSV from a readable stream and returns all records. This method buffers the full stream in memory before conversion.
+
+#### `parseStringSafe<T>(csvContent, options?): CsvParseResult<T>`
+
+Like `parseString`, but returns `{ data, errors }` — collecting recoverable per-row errors instead of
+throwing on the first. Configuration/I/O errors still throw.
+
+#### `parseFileSyncSafe<T>(filePath, options?): CsvParseResult<T>`
+
+`parseFileSync` with error accumulation.
+
+#### `parseFileSafe<T>(filePath, options?): Promise<CsvParseResult<T>>`
+
+`parseFile` with error accumulation.
+
+#### `parseStreamSafe<T>(stream, options?): Promise<CsvParseResult<T>>`
+
+`parseStream` with error accumulation.
+
+```typescript
+interface CsvRowError {
+	row: number; // 1-based row where the problem occurred
+	column?: number; // 1-based column, when known
+	code: "validation" | "grouping";
+	message: string;
+}
+
+interface CsvParseResult<T> {
+	data: T[]; // records that parsed successfully
+	errors: CsvRowError[]; // recoverable per-row errors, in order
+}
+```
 
 ### CsvStreamParser Class
 
@@ -1703,9 +1630,6 @@ type ArrayMode = "rows" | "json";
 type DuplicateHeaderStrategy = "error" | "rename" | "combine" | "first" | "last";
 
 // Function types
-type ValueTransformer = (value: string | number | boolean, header: string) => unknown;
-type HeaderTransformer = (header: string) => string;
-type RowFilter = (record: CsvRecord, rowIndex: number) => boolean;
 type ProgressCallback = (info: ProgressInfo) => void | Promise<void>;
 
 // Progress tracking
@@ -1714,6 +1638,19 @@ interface ProgressInfo {
 	recordsEmitted: number; // Records emitted so far
 	headersProcessed: boolean; // Whether headers have been parsed
 	elapsedMs: number; // Milliseconds since start
+}
+
+// Error accumulation
+type CsvRowErrorCode = "validation" | "grouping";
+interface CsvRowError {
+	row: number;
+	column?: number;
+	code: CsvRowErrorCode;
+	message: string;
+}
+interface CsvParseResult<T> {
+	data: T[];
+	errors: CsvRowError[];
 }
 
 // Data types
@@ -1785,17 +1722,14 @@ interface CsvStreamParserOptions extends CsvParserOptions {
    const result = CsvParser.parseFileSync("./huge.csv");
    ```
 
-6. **Use Row Filtering for Memory Efficiency:**
+6. **Validate Untrusted Files in One Pass:**
 
    ```typescript
-   // ✅ Filter during parsing - uses less memory
-   const result = CsvParser.parseFileSync("./data.csv", {
-   	rowFilter: record => record.status === "active",
+   // ✅ Collect every bad row instead of throwing on the first
+   const { data, errors } = CsvParser.parseFileSyncSafe("./upload.csv", {
+   	validationMode: "error",
    });
-
-   // ❌ Filter after parsing - loads everything into memory first
-   const all = CsvParser.parseFileSync("./data.csv");
-   const filtered = all.filter(r => r.status === "active");
+   if (errors.length) reportToUser(errors);
    ```
 
 7. **Specify Encoding for Non-UTF8 Files:**
@@ -1809,7 +1743,7 @@ interface CsvStreamParserOptions extends CsvParserOptions {
 8. **Use Consistent Column Headers:**
    - Ensure the first column is always the identifier for grouping
    - Use consistent dot notation for nested structures
-   - Keep header names descriptive and use `headerTransformer` for normalization
+   - Keep header names descriptive, or use `columnMapping` to rename them
 
 ## 🤝 Contributing
 

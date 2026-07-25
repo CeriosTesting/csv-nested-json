@@ -22,20 +22,18 @@ describe("Final gaps", () => {
 		});
 
 		it("buffered: a delimiter inside the (space-prefixed) quoted field no longer splits it", () => {
-			expect(CsvParser.parseString(`id,note\n1, "x,y"`, { trimLeadingSpace: true })).toEqual([
-				{ id: "1", note: "x,y" },
-			]);
+			expect(CsvParser.parseString(`id,note\n1, "x,y"`, { trimLeadingSpace: true })).toEqual([{ id: 1, note: "x,y" }]);
 		});
 
 		it("streaming matches the buffered result", async () => {
 			await expect(collectStream(`id,note\n1, "x,y"`, { trimLeadingSpace: true })).resolves.toEqual([
-				{ id: "1", note: "x,y" },
+				{ id: 1, note: "x,y" },
 			]);
 		});
 
 		it("streaming: a newline inside a space-prefixed quoted field is not split across lines", async () => {
 			const records = await collectStream(`a,b\n1, "line1\nline2"`, { trimLeadingSpace: true });
-			expect(records).toEqual([{ a: "1", b: "line1\nline2" }]);
+			expect(records).toEqual([{ a: 1, b: "line1\nline2" }]);
 		});
 
 		it("preserves whitespace inside the quoted field (only leading space before the quote is dropped)", () => {
@@ -67,8 +65,8 @@ describe("Final gaps", () => {
 			const streamed = await collectStream(csv);
 			expect(streamed).toEqual(CsvParser.parseString(csv));
 			expect(streamed).toEqual([
-				{ a: "1", b: "2" },
-				{ a: "3", b: "4" },
+				{ a: 1, b: 2 },
+				{ a: 3, b: 4 },
 			]);
 		});
 
@@ -80,13 +78,13 @@ describe("Final gaps", () => {
 				records.push(record as NestedObject);
 			}
 			expect(records).toEqual([
-				{ a: "1", b: "2" },
-				{ a: "3", b: "x,y" },
+				{ a: 1, b: 2 },
+				{ a: 3, b: "x,y" },
 			]);
 		});
 	});
 
-	describe("warnInertOptions: preserveUnsafeIntegersAsString without autoParseNumbers", () => {
+	describe("warnInertOptions: preserveUnsafeIntegersAsString with autoParseNumbers disabled", () => {
 		let warnSpy: ReturnType<typeof vi.spyOn>;
 		beforeEach(() => {
 			warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -95,24 +93,24 @@ describe("Final gaps", () => {
 			warnSpy.mockRestore();
 		});
 
-		it("buffered: warns exactly once when the option is inert", () => {
-			CsvParser.parseString("id\n1", { preserveUnsafeIntegersAsString: true });
+		it("buffered: warns exactly once when autoParseNumbers is explicitly disabled", () => {
+			CsvParser.parseString("id\n1", { preserveUnsafeIntegersAsString: true, autoParseNumbers: false });
 			expect(warnSpy).toHaveBeenCalledTimes(1);
 			expect(warnSpy.mock.calls[0][0]).toContain("preserveUnsafeIntegersAsString");
 		});
 
-		it("buffered: does not warn when autoParseNumbers is also enabled", () => {
-			CsvParser.parseString("id\n1", { preserveUnsafeIntegersAsString: true, autoParseNumbers: true });
+		it("buffered: does not warn when autoParseNumbers is left at its default (on)", () => {
+			CsvParser.parseString("id\n1", { preserveUnsafeIntegersAsString: true });
 			expect(warnSpy).not.toHaveBeenCalled();
 		});
 
-		it("streaming: warns exactly once at construction when the option is inert", () => {
-			new CsvStreamParser({ preserveUnsafeIntegersAsString: true });
+		it("streaming: warns exactly once at construction when autoParseNumbers is explicitly disabled", () => {
+			new CsvStreamParser({ preserveUnsafeIntegersAsString: true, autoParseNumbers: false });
 			expect(warnSpy).toHaveBeenCalledTimes(1);
 		});
 
-		it("streaming: does not warn when autoParseNumbers is also enabled", () => {
-			new CsvStreamParser({ preserveUnsafeIntegersAsString: true, autoParseNumbers: true });
+		it("streaming: does not warn when autoParseNumbers is left at its default (on)", () => {
+			new CsvStreamParser({ preserveUnsafeIntegersAsString: true });
 			expect(warnSpy).not.toHaveBeenCalled();
 		});
 	});

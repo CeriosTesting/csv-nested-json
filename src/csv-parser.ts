@@ -4,7 +4,7 @@ import { CsvFileReader } from "./csv-file-reader";
 import { CsvReader } from "./csv-reader";
 import { NestedJsonConverter } from "./nested-json-converter";
 import { warnInertOptions } from "./option-validation";
-import type { CsvParserOptions, NestedObject } from "./types";
+import type { CsvErrorSink, CsvParseResult, CsvParserOptions, CsvRowError, NestedObject } from "./types";
 
 /**
  * High-level CSV to nested JSON parser.
@@ -14,28 +14,21 @@ import type { CsvParserOptions, NestedObject } from "./types";
  * - Dot-notation headers for nested objects (`person.address.city`)
  * - Array fields via the `[]` header suffix (`tags[]`); arrays are never created implicitly
  * - Continuation rows (rows with empty first column extend previous record, filling `[]` arrays)
- * - Value transformation (auto-parse numbers, booleans, custom transformers)
+ * - Automatic number/boolean coercion (on by default; set the flags to `false` to disable)
  * - BOM stripping and row skipping
+ * - Error accumulation via the `*Safe` methods (collect per-row errors instead of throwing)
  *
  * @example
  * ```typescript
  * // Parse from file
  * const result = CsvParser.parseFileSync('data.csv');
  *
- * // Parse from string with options
- * const result = CsvParser.parseString(csvContent, {
- *   autoParseNumbers: true,
- *   autoParseBooleans: true,
- *   skipRows: 1
- * });
+ * // Numbers and booleans are coerced by default
+ * const result = CsvParser.parseString('id,active,score\n1,true,9.5');
+ * // [{ id: 1, active: true, score: 9.5 }]
  *
- * // Parse with custom value transformer
- * const result = CsvParser.parseString(csv, {
- *   valueTransformer: (value, header) => {
- *     if (header === 'date') return new Date(value as string);
- *     return value;
- *   }
- * });
+ * // Collect recoverable errors instead of throwing
+ * const { data, errors } = CsvParser.parseStringSafe(csvContent);
  * ```
  */
 export abstract class CsvParser {
@@ -156,8 +149,75 @@ export abstract class CsvParser {
 	 * ```
 	 */
 	static parseString<T = NestedObject>(csvContent: string, options: CsvParserOptions = {}): T[] {
+		return this.parseStringInternal<T>(csvContent, options);
+	}
+
+	/**
+	 * Internal parse used by both the throwing and `*Safe` entry points. When `errorSink` is
+	 * provided, recoverable per-row errors (column-count mismatches and continuation/array grouping
+	 * problems) are routed to it and the offending row/group is skipped instead of thrown.
+	 */
+	private static parseStringInternal<T = NestedObject>(
+		csvContent: string,
+		options: CsvParserOptions,
+		errorSink?: CsvErrorSink
+	): T[] {
 		warnInertOptions(options);
-		const records = CsvReader.parseWithQuotedEmptyProvenance(csvContent, options);
-		return NestedJsonConverter.convert(records, options) as T[];
+		const records = CsvReader.parseWithQuotedEmptyProvenance(csvContent, options, errorSink);
+		return NestedJsonConverter.convert(records, options, errorSink) as T[];
+	}
+
+	/**
+	 * Parse CSV string content, collecting recoverable per-row errors instead of throwing on the
+	 * first one.
+	 *
+	 * Returns `{ data, errors }`: `data` holds the records that parsed successfully, and `errors`
+	 * lists every row/group that failed validation or grouping. Configuration and I/O problems (bad
+	 * delimiter/quote, unsupported encoding, etc.) are not per-row and still throw.
+	 *
+	 * @example
+	 * ```typescript
+	 * const { data, errors } = CsvParser.parseStringSafe("a,b\n1,2\n1,2,3\n4,5");
+	 * // data: [{ a: 1, b: 2 }, { a: 4, b: 5 }]
+	 * // errors: [{ row: 3, column: 3, code: "validation", message: "..." }]
+	 * ```
+	 */
+	static parseStringSafe<T = NestedObject>(csvContent: string, options: CsvParserOptions = {}): CsvParseResult<T> {
+		const errors: CsvRowError[] = [];
+		const data = this.parseStringInternal<T>(csvContent, options, e => errors.push(e));
+		return { data, errors };
+	}
+
+	/**
+	 * Parse a CSV file synchronously, collecting recoverable per-row errors instead of throwing.
+	 * See {@link CsvParser.parseStringSafe}.
+	 */
+	static parseFileSyncSafe<T = NestedObject>(csvFilePath: string, options: CsvParserOptions = {}): CsvParseResult<T> {
+		const csvContent = CsvFileReader.readFileSync(csvFilePath, options);
+		return this.parseStringSafe<T>(csvContent, options);
+	}
+
+	/**
+	 * Parse a CSV file asynchronously, collecting recoverable per-row errors instead of throwing.
+	 * See {@link CsvParser.parseStringSafe}.
+	 */
+	static async parseFileSafe<T = NestedObject>(
+		csvFilePath: string,
+		options: CsvParserOptions = {}
+	): Promise<CsvParseResult<T>> {
+		const csvContent = await CsvFileReader.readFile(csvFilePath, options);
+		return this.parseStringSafe<T>(csvContent, options);
+	}
+
+	/**
+	 * Parse CSV from a readable stream (buffered), collecting recoverable per-row errors instead of
+	 * throwing. See {@link CsvParser.parseStringSafe}.
+	 */
+	static async parseStreamSafe<T = NestedObject>(
+		stream: Readable,
+		options: CsvParserOptions = {}
+	): Promise<CsvParseResult<T>> {
+		const csvContent = await CsvFileReader.readStream(stream, options);
+		return this.parseStringSafe<T>(csvContent, options);
 	}
 }

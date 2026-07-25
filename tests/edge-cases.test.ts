@@ -19,7 +19,7 @@ describe("Edge Cases", () => {
 			const result = CsvParser.parseString(csvWithBom);
 
 			expect(result).toHaveLength(1);
-			expect(result[0]).toEqual({ id: "1", name: "Alice" });
+			expect(result[0]).toEqual({ id: 1, name: "Alice" });
 			// Ensure the BOM didn't become part of the first header
 			expect(Object.keys(result[0])[0]).toBe("id");
 		});
@@ -28,7 +28,7 @@ describe("Edge Cases", () => {
 			const csvWithBom = "\uFEFFid,name,city\n1,Bob,NYC";
 			const result = CsvParser.parseString(csvWithBom, { stripBom: true });
 
-			expect(result[0]).toEqual({ id: "1", name: "Bob", city: "NYC" });
+			expect(result[0]).toEqual({ id: 1, name: "Bob", city: "NYC" });
 		});
 
 		it("should preserve BOM when stripBom: false", () => {
@@ -53,7 +53,7 @@ describe("Edge Cases", () => {
 			const csv = "id,name\n1,NoB0M";
 			const result = CsvParser.parseString(csv);
 
-			expect(result[0]).toEqual({ id: "1", name: "NoB0M" });
+			expect(result[0]).toEqual({ id: 1, name: "NoB0M" });
 		});
 
 		it("should strip BOM using CsvReader.stripBom directly", () => {
@@ -77,9 +77,9 @@ describe("Edge Cases", () => {
 			const result = CsvParser.parseString(csv);
 
 			expect(result).toHaveLength(3);
-			expect(result[0]).toEqual({ id: "1", name: "田中太郎", city: "東京" });
-			expect(result[1]).toEqual({ id: "2", name: "김철수", city: "서울" });
-			expect(result[2]).toEqual({ id: "3", name: "张伟", city: "北京" });
+			expect(result[0]).toEqual({ id: 1, name: "田中太郎", city: "東京" });
+			expect(result[1]).toEqual({ id: 2, name: "김철수", city: "서울" });
+			expect(result[2]).toEqual({ id: 3, name: "张伟", city: "北京" });
 		});
 
 		it("should handle emoji characters", () => {
@@ -107,8 +107,8 @@ describe("Edge Cases", () => {
 			const result = CsvParser.parseString(csv);
 
 			expect(result).toHaveLength(2);
-			expect(result[0]).toEqual({ id: "1", name: "محمد", greeting: "مرحبا" });
-			expect(result[1]).toEqual({ id: "2", name: "יוסי", greeting: "שלום" });
+			expect(result[0]).toEqual({ id: 1, name: "محمد", greeting: "مرحبا" });
+			expect(result[1]).toEqual({ id: 2, name: "יוסי", greeting: "שלום" });
 		});
 
 		it("should handle mixed scripts in same field", () => {
@@ -339,36 +339,6 @@ describe("Edge Cases", () => {
 			expect(result[0].active).toBe(true);
 		});
 
-		it("should apply custom valueTransformer", () => {
-			const csv = "id,name,city\n1,alice,new york";
-			const result = CsvParser.parseString(csv, {
-				valueTransformer: (value, header) => {
-					if (header === "name" && typeof value === "string") {
-						return value.toUpperCase();
-					}
-					return value;
-				},
-			});
-
-			expect(result[0].name).toBe("ALICE");
-			expect(result[0].city).toBe("new york");
-		});
-
-		it("should apply valueTransformer after auto-parsing", () => {
-			const csv = "id,value\n1,100";
-			const result = CsvParser.parseString(csv, {
-				autoParseNumbers: true,
-				valueTransformer: (value, header) => {
-					if (header === "value" && typeof value === "number") {
-						return value * 2;
-					}
-					return value;
-				},
-			});
-
-			expect(result[0].value).toBe(200);
-		});
-
 		it("should not transform empty values", () => {
 			const csv = "id,name,city\n1,,NYC";
 			const result = CsvParser.parseString(csv, {
@@ -388,14 +358,14 @@ describe("Edge Cases", () => {
 			const result = CsvParser.parseString(csv, { skipRows: 2 });
 
 			expect(result).toHaveLength(1);
-			expect(result[0]).toEqual({ id: "1", name: "Alice" });
+			expect(result[0]).toEqual({ id: 1, name: "Alice" });
 		});
 
 		it("should skip zero rows by default", () => {
 			const csv = "id,name\n1,Alice";
 			const result = CsvParser.parseString(csv);
 
-			expect(result[0]).toEqual({ id: "1", name: "Alice" });
+			expect(result[0]).toEqual({ id: 1, name: "Alice" });
 		});
 
 		it("should handle skipRows larger than file", () => {
@@ -409,7 +379,7 @@ describe("Edge Cases", () => {
 			const csv = "Skip this\nid,name\n1,Test";
 			const result = CsvParser.parseString(csv, { skipRows: 1 });
 
-			expect(result[0]).toEqual({ id: "1", name: "Test" });
+			expect(result[0]).toEqual({ id: 1, name: "Test" });
 		});
 	});
 
@@ -539,7 +509,7 @@ describe("Edge Cases", () => {
 			}
 
 			expect(records).toHaveLength(1);
-			expect((records[0] as { id: string }).id).toBe("1");
+			expect((records[0] as { id: number }).id).toBe(1);
 		});
 	});
 
@@ -682,7 +652,7 @@ describe("File I/O Edge Cases", () => {
 		fs.writeFileSync(filePath, "\uFEFFid,name\n1,Test", "utf-8");
 		const result = CsvParser.parseFileSync(filePath);
 
-		expect(result[0]).toEqual({ id: "1", name: "Test" });
+		expect(result[0]).toEqual({ id: 1, name: "Test" });
 	});
 
 	it("should write and read back CSV with JsonToCsv", () => {
@@ -694,7 +664,8 @@ describe("File I/O Edge Cases", () => {
 		const filePath = path.join(testFolder.testFolder, "output.csv");
 		JsonToCsv.writeFileSync(filePath, data);
 
-		const result = CsvParser.parseFileSync(filePath);
+		// Disable auto-parse so string values round-trip faithfully (default-on would coerce "1" -> 1).
+		const result = CsvParser.parseFileSync(filePath, { autoParseNumbers: false, autoParseBooleans: false });
 		expect(result).toEqual(data);
 	});
 

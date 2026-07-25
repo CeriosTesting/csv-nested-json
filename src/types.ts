@@ -27,8 +27,52 @@ export type ArrayMode = "rows" | "json";
 export type CsvRecord = Record<string, string>;
 
 /**
- * A nested object structure produced by the CSV parser.
- * Values can be primitives, arrays, dates, or nested objects.
+ * Category of a recoverable per-row error collected by the `*Safe` parser methods.
+ * - `'validation'`: A data row whose column count does not match the header.
+ * - `'grouping'`: A continuation/array grouping problem (e.g. a repeated non-`[]`
+ *   path within a group, or a continuation row with no base row).
+ */
+export type CsvRowErrorCode = "validation" | "grouping";
+
+/**
+ * A single recoverable error collected during a `*Safe` parse instead of being thrown.
+ */
+export interface CsvRowError {
+	/** 1-based row number where the problem occurred. */
+	row: number;
+	/** 1-based column number, when known. */
+	column?: number;
+	/** Category of the error. */
+	code: CsvRowErrorCode;
+	/** Human-readable description. */
+	message: string;
+}
+
+/**
+ * Result returned by the `*Safe` parser methods: the successfully parsed records
+ * plus any recoverable per-row errors that were collected rather than thrown.
+ */
+export interface CsvParseResult<T = NestedObject> {
+	/** Records that parsed successfully. Rows/groups with errors are omitted. */
+	data: T[];
+	/** Recoverable per-row errors, in the order encountered. */
+	errors: CsvRowError[];
+}
+
+/**
+ * Sink for recoverable per-row errors. When threaded through the internal parse path (by the
+ * `*Safe` parser methods), a per-row failure is reported here and the offending row/group is
+ * skipped instead of throwing.
+ *
+ * @internal
+ */
+export type CsvErrorSink = (error: CsvRowError) => void;
+
+/**
+ * A nested value in a structure the parser produces or that {@link JsonToCsv} accepts.
+ * The parser produces strings, numbers, booleans, `null` (via `nullRepresentation`), arrays, and
+ * nested objects. `Date` is not produced by the parser but is a valid input to `JsonToCsv`, which
+ * serializes it to an ISO string.
  */
 export type NestedValue = string | number | boolean | null | Date | NestedObject | NestedValue[];
 
@@ -38,60 +82,6 @@ export type NestedValue = string | number | boolean | null | Date | NestedObject
 export interface NestedObject {
 	[key: string]: NestedValue;
 }
-
-/**
- * Function type for transforming individual cell values.
- * Receives the current value (after auto-parsing if enabled) and the header name.
- *
- * @param value - The cell value (may be string, number, or boolean after auto-parsing)
- * @param header - The column header name
- * @returns The transformed value
- *
- * @example
- * ```typescript
- * // Convert specific columns to uppercase
- * const transformer: ValueTransformer = (value, header) => {
- *   if (header === 'name' && typeof value === 'string') {
- *     return value.toUpperCase();
- *   }
- *   return value;
- * };
- * ```
- */
-export type ValueTransformer = (value: string | number | boolean, header: string) => unknown;
-
-/**
- * Function type for transforming header names during parsing.
- * Receives the original header name and returns the transformed name.
- *
- * @param header - The original header name from the CSV
- * @returns The transformed header name
- *
- * @example
- * ```typescript
- * // Convert headers to camelCase
- * const transformer: HeaderTransformer = (header) => {
- *   return header.replace(/[-_](.)/g, (_, c) => c.toUpperCase());
- * };
- * ```
- */
-export type HeaderTransformer = (header: string) => string;
-
-/**
- * Function type for filtering rows during parsing.
- * Receives the parsed record and returns true to include, false to exclude.
- *
- * @param record - The parsed record (flat, before nesting)
- * @param rowIndex - The 0-based index of the data row (excludes header and skipped rows)
- * @returns true to include the row, false to exclude it
- *
- * @example
- * ```typescript
- * // Only include rows where status is 'active'
- * const filter: RowFilter = (record) => record.status === 'active';
- * ```
- */
-export type RowFilter = (record: CsvRecord, rowIndex: number) => boolean;
 
 /**
  * Representation for null values in output.
@@ -391,22 +381,6 @@ export interface CsvParserOptions {
 	autoParseBooleans?: boolean;
 
 	/**
-	 * Custom function to transform values after parsing.
-	 * Called after autoParseNumbers and autoParseBooleans (if enabled).
-	 *
-	 * @example
-	 * ```typescript
-	 * CsvParser.parseString(csv, {
-	 *   valueTransformer: (value, header) => {
-	 *     if (header === 'date') return new Date(value as string);
-	 *     return value;
-	 *   }
-	 * });
-	 * ```
-	 */
-	valueTransformer?: ValueTransformer;
-
-	/**
 	 * Mode for converting arrays to CSV (used by JsonToCsv).
 	 * - `'rows'`: Output arrays as continuation rows (default, matches parser)
 	 * - `'json'`: JSON-stringify arrays into a single cell
@@ -415,23 +389,8 @@ export interface CsvParserOptions {
 	arrayMode?: ArrayMode;
 
 	/**
-	 * Transform header names before processing.
-	 * Applied to each header after reading from CSV.
-	 *
-	 * @example
-	 * ```typescript
-	 * // Convert headers to lowercase
-	 * CsvParser.parseString(csv, {
-	 *   headerTransformer: (header) => header.toLowerCase()
-	 * });
-	 * ```
-	 */
-	headerTransformer?: HeaderTransformer;
-
-	/**
 	 * Map column names to new names.
-	 * Applied after headerTransformer (if specified).
-	 * Keys are original names, values are new names.
+	 * Keys are the raw CSV header names, values are the new names.
 	 *
 	 * @example
 	 * ```typescript
@@ -444,37 +403,6 @@ export interface CsvParserOptions {
 	 * ```
 	 */
 	columnMapping?: Record<string, string>;
-
-	/**
-	 * Filter rows during parsing.
-	 * Return true to include the row, false to exclude it.
-	 * Applied after parsing but before nesting conversion.
-	 *
-	 * @example
-	 * ```typescript
-	 * CsvParser.parseString(csv, {
-	 *   rowFilter: (record) => record.status !== 'deleted'
-	 * });
-	 * ```
-	 */
-	rowFilter?: RowFilter;
-
-	/**
-	 * Default values for columns.
-	 * Applied when a cell is empty.
-	 * Keys are column names (after transformation/mapping).
-	 *
-	 * @example
-	 * ```typescript
-	 * CsvParser.parseString(csv, {
-	 *   defaultValues: {
-	 *     status: 'pending',
-	 *     count: '0'
-	 *   }
-	 * });
-	 * ```
-	 */
-	defaultValues?: Record<string, string>;
 
 	/**
 	 * Values to treat as null.

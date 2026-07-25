@@ -2,12 +2,11 @@ import { CsvDuplicateHeaderError, CsvValidationError } from "./errors";
 import {
 	type InternalCsvCellValue,
 	type InternalCsvRecord,
-	isEmptyCsvCellValue,
 	QUOTED_EMPTY_CELL,
 	toPublicCsvCellValue,
 } from "./internal-empty-cell";
 import { assertDelimiterAndQuote, isLeadingSpaceOnly } from "./option-validation";
-import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, ValidationMode } from "./types";
+import type { CsvErrorSink, CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, ValidationMode } from "./types";
 
 /**
  * Low-level CSV parsing utilities.
@@ -49,16 +48,23 @@ export class CsvReader {
 	/**
 	 * Parse CSV content with internal quoted-empty provenance tracking.
 	 *
+	 * @param errorSink - When provided, per-row validation failures are reported here and the row is
+	 *   skipped instead of throwing (used by the `*Safe` parser methods).
 	 * @internal
 	 */
-	static parseWithQuotedEmptyProvenance(content: string, options: CsvParserOptions = {}): InternalCsvRecord[] {
-		return this.parseInternal(content, options, true);
+	static parseWithQuotedEmptyProvenance(
+		content: string,
+		options: CsvParserOptions = {},
+		errorSink?: CsvErrorSink
+	): InternalCsvRecord[] {
+		return this.parseInternal(content, options, true, errorSink);
 	}
 
 	private static parseInternal(
 		content: string,
 		options: CsvParserOptions,
-		preserveQuotedEmpty: boolean
+		preserveQuotedEmpty: boolean,
+		errorSink?: CsvErrorSink
 	): InternalCsvRecord[] {
 		if (!content || content.trim() === "") {
 			return [];
@@ -110,13 +116,8 @@ export class CsvReader {
 			validationMode
 		);
 
-		// Apply header transformer if specified
+		// Apply column mapping if specified (based on the raw/filtered header names)
 		let headers = filteredOriginalHeaders;
-		if (options.headerTransformer) {
-			headers = headers.map(options.headerTransformer);
-		}
-
-		// Apply column mapping if specified (based on transformed header names)
 		if (options.columnMapping) {
 			headers = headers.map(h => options.columnMapping?.[h] ?? h);
 		}
@@ -132,7 +133,6 @@ export class CsvReader {
 
 		// Parse data rows
 		const records: InternalCsvRecord[] = [];
-		let dataRowIndex = 0;
 		for (let i = dataStartIndex + 1; i < rows.length; i++) {
 			if (rows[i].blank) continue; // Skip empty lines (raw line was whitespace-only)
 
@@ -144,6 +144,11 @@ export class CsvReader {
 				const message = `Row ${lineNumber} has ${values.length} values but only ${headers.length} columns defined. Extra values will be ignored.`;
 
 				if (validationMode === "error") {
+					// In `*Safe` mode, collect and skip instead of aborting the whole parse.
+					if (errorSink) {
+						errorSink({ row: lineNumber, column: headers.length + 1, code: "validation", message });
+						continue;
+					}
 					throw new CsvValidationError(message, lineNumber, headers.length, values.length);
 				}
 				if (validationMode === "warn") {
@@ -156,18 +161,14 @@ export class CsvReader {
 			if (values.length < headers.length && validationMode === "error") {
 				const lineNumber = i + 1;
 				const message = `Row ${lineNumber} has ${values.length} values but ${headers.length} columns are defined.`;
+				if (errorSink) {
+					errorSink({ row: lineNumber, column: values.length + 1, code: "validation", message });
+					continue;
+				}
 				throw new CsvValidationError(message, lineNumber, headers.length, values.length);
 			}
 
-			const record = this.createRecord(values, headers, includedIndices, duplicateIndices, dupStrategy, options);
-
-			// Apply row filter if specified
-			const rowFilterRecord = preserveQuotedEmpty ? this.toPublicRecord(record) : (record as CsvRecord);
-			if (options.rowFilter && !options.rowFilter(rowFilterRecord, dataRowIndex)) {
-				dataRowIndex++;
-				continue;
-			}
-			dataRowIndex++;
+			const record = this.createRecord(values, headers, includedIndices, duplicateIndices, dupStrategy);
 
 			records.push(record);
 		}
@@ -286,18 +287,13 @@ export class CsvReader {
 		headers: string[],
 		includedIndices: number[],
 		duplicateIndices: Set<number>,
-		dupStrategy: DuplicateHeaderStrategy,
-		options: CsvParserOptions
+		dupStrategy: DuplicateHeaderStrategy
 	): InternalCsvRecord {
 		const record: InternalCsvRecord = {};
 
 		for (let j = 0; j < headers.length; j++) {
 			const originalIndex = includedIndices[j];
-			let value: InternalCsvCellValue = originalIndex < values.length ? values[originalIndex] : "";
-
-			if (isEmptyCsvCellValue(value) && options.defaultValues?.[headers[j]] !== undefined) {
-				value = options.defaultValues[headers[j]];
-			}
+			const value: InternalCsvCellValue = originalIndex < values.length ? values[originalIndex] : "";
 
 			const header = headers[j];
 
@@ -324,16 +320,6 @@ export class CsvReader {
 		}
 
 		return record;
-	}
-
-	private static toPublicRecord(record: InternalCsvRecord): CsvRecord {
-		const publicRecord: CsvRecord = {};
-
-		for (const header of Object.keys(record)) {
-			publicRecord[header] = toPublicCsvCellValue(record[header]);
-		}
-
-		return publicRecord;
 	}
 
 	/**

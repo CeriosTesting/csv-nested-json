@@ -255,7 +255,7 @@ describe("JsonToCsv", () => {
 			const data = [{ id: "1", tags: ["js", "ts", "node"] }];
 
 			const csv = JsonToCsv.stringify(data, { arrayMode: "rows" });
-			const parsed = CsvParser.parseString(csv);
+			const parsed = CsvParser.parseString(csv, { autoParseNumbers: false, autoParseBooleans: false });
 
 			expect(parsed).toEqual(data);
 		});
@@ -272,7 +272,7 @@ describe("JsonToCsv", () => {
 			];
 
 			const csv = JsonToCsv.stringify(data, { arrayMode: "rows" });
-			const parsed = CsvParser.parseString(csv);
+			const parsed = CsvParser.parseString(csv, { autoParseNumbers: false, autoParseBooleans: false });
 
 			expect(parsed).toEqual(data);
 		});
@@ -525,7 +525,7 @@ describe("JsonToCsv - Round-trip", () => {
 		];
 
 		const csv = JsonToCsv.stringify(originalData);
-		const parsedData = CsvParser.parseString(csv);
+		const parsedData = CsvParser.parseString(csv, { autoParseNumbers: false, autoParseBooleans: false });
 
 		expect(parsedData).toEqual(originalData);
 	});
@@ -534,7 +534,7 @@ describe("JsonToCsv - Round-trip", () => {
 		const originalData = [{ id: "1", person: { name: "Alice", city: "NYC" } }];
 
 		const csv = JsonToCsv.stringify(originalData);
-		const parsedData = CsvParser.parseString(csv);
+		const parsedData = CsvParser.parseString(csv, { autoParseNumbers: false, autoParseBooleans: false });
 
 		expect(parsedData).toEqual(originalData);
 	});
@@ -543,7 +543,7 @@ describe("JsonToCsv - Round-trip", () => {
 		const originalData = [{ id: "1", description: 'Hello, "World"' }];
 
 		const csv = JsonToCsv.stringify(originalData);
-		const parsedData = CsvParser.parseString(csv);
+		const parsedData = CsvParser.parseString(csv, { autoParseNumbers: false, autoParseBooleans: false });
 
 		expect(parsedData).toEqual(originalData);
 	});
@@ -552,7 +552,7 @@ describe("JsonToCsv - Round-trip", () => {
 		const originalData = [{ id: "1", bio: "Line 1\nLine 2" }];
 
 		const csv = JsonToCsv.stringify(originalData);
-		const parsedData = CsvParser.parseString(csv);
+		const parsedData = CsvParser.parseString(csv, { autoParseNumbers: false, autoParseBooleans: false });
 
 		expect(parsedData).toEqual(originalData);
 	});

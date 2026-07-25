@@ -25,8 +25,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = CsvParser.parseFileSync(csvPath);
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", address: { city: "NYC" } },
-				{ id: "2", name: "Bob", address: { city: "LA" } },
+				{ id: 1, name: "Alice", address: { city: "NYC" } },
+				{ id: 2, name: "Bob", address: { city: "LA" } },
 			]);
 		});
 
@@ -46,8 +46,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = CsvParser.parseFileSync(csvPath, { delimiter: ";" });
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 	});
@@ -63,8 +63,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = await CsvParser.parseFile(csvPath);
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", address: { city: "NYC" } },
-				{ id: "2", name: "Bob", address: { city: "LA" } },
+				{ id: 1, name: "Alice", address: { city: "NYC" } },
+				{ id: 2, name: "Bob", address: { city: "LA" } },
 			]);
 		});
 
@@ -84,8 +84,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = await CsvParser.parseFile(csvPath, { delimiter: ";" });
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 	});
@@ -99,8 +99,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = CsvParser.parseString(csvContent);
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", address: { city: "NYC" } },
-				{ id: "2", name: "Bob", address: { city: "LA" } },
+				{ id: 1, name: "Alice", address: { city: "NYC" } },
+				{ id: 2, name: "Bob", address: { city: "LA" } },
 			]);
 		});
 
@@ -117,8 +117,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = CsvParser.parseString(csvContent, { delimiter: ";" });
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 
@@ -132,7 +132,7 @@ describe("CsvParser - Integration Tests", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "Alice",
 					skills: ["JavaScript", "TypeScript", "React"],
 				},
@@ -152,8 +152,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = await CsvParser.parseStream(stream);
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", address: { city: "NYC" } },
-				{ id: "2", name: "Bob", address: { city: "LA" } },
+				{ id: 1, name: "Alice", address: { city: "NYC" } },
+				{ id: 2, name: "Bob", address: { city: "LA" } },
 			]);
 		});
 
@@ -166,8 +166,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = await CsvParser.parseStream(stream);
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", address: { city: "NYC" } },
-				{ id: "2", name: "Bob", address: { city: "LA" } },
+				{ id: 1, name: "Alice", address: { city: "NYC" } },
+				{ id: 2, name: "Bob", address: { city: "LA" } },
 			]);
 		});
 
@@ -185,8 +185,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = await CsvParser.parseStream(stream, { delimiter: ";" });
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 	});
@@ -202,7 +202,7 @@ describe("CsvParser - Integration Tests", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					username: "johndoe",
 					email: "john@example.com",
 					profile: {
@@ -215,7 +215,7 @@ describe("CsvParser - Integration Tests", () => {
 					],
 				},
 				{
-					id: "2",
+					id: 2,
 					username: "janedoe",
 					email: "jane@example.com",
 					profile: {
@@ -235,8 +235,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = CsvParser.parseString(csvContent, { delimiter: ";" });
 
 			expect(result).toEqual([
-				{ id: "1", name: "Product A", price: "19,99", description: "A great product, very useful" },
-				{ id: "2", name: "Product B", price: "29,99", description: "Another product, even better" },
+				{ id: 1, name: "Product A", price: "19,99", description: "A great product, very useful" },
+				{ id: 2, name: "Product B", price: "29,99", description: "Another product, even better" },
 			]);
 		});
 
@@ -250,17 +250,17 @@ describe("CsvParser - Integration Tests", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					company: "TechCorp",
 					projects: [
-						{ name: "Website", team: { lead: "Alice", size: "5" } },
-						{ name: "Mobile App", team: { lead: "Bob", size: "8" } },
+						{ name: "Website", team: { lead: "Alice", size: 5 } },
+						{ name: "Mobile App", team: { lead: "Bob", size: 8 } },
 					],
 				},
 				{
-					id: "2",
+					id: 2,
 					company: "DesignCo",
-					projects: [{ name: "Dashboard", team: { lead: "Charlie", size: "3" } }],
+					projects: [{ name: "Dashboard", team: { lead: "Charlie", size: 3 } }],
 				},
 			]);
 		});

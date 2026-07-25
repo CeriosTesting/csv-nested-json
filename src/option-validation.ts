@@ -39,13 +39,15 @@ export function isLeadingSpaceOnly(value: string): boolean {
  * Warn about options that have no effect in the current configuration, so a silent no-op does not
  * mask a mistake. These are advisory only — never throw, so valid parses are never blocked.
  *
- * Currently detects `preserveUnsafeIntegersAsString` set without `autoParseNumbers` (the option only
- * governs how numeric parsing treats already-parsed integers, so it is inert on its own).
+ * Currently detects `preserveUnsafeIntegersAsString` set while `autoParseNumbers` is explicitly
+ * disabled (the option only governs how numeric parsing treats already-parsed integers, so it is
+ * inert without number parsing). `autoParseNumbers` defaults to on, so this warns only when a caller
+ * both opts into the option and turns number parsing off.
  */
 export function warnInertOptions(options: CsvParserOptions): void {
-	if (options.preserveUnsafeIntegersAsString && !options.autoParseNumbers) {
+	if (options.preserveUnsafeIntegersAsString && options.autoParseNumbers === false) {
 		console.warn(
-			"Warning: preserveUnsafeIntegersAsString has no effect without autoParseNumbers; enable autoParseNumbers to preserve large integers as strings."
+			"Warning: preserveUnsafeIntegersAsString has no effect when autoParseNumbers is disabled; keep autoParseNumbers enabled to preserve large integers as strings."
 		);
 	}
 }

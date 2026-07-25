@@ -12,7 +12,7 @@ import { applyNullRepresentation, tryParseBoolean, tryParseNumber } from "./valu
  * @internal
  */
 
-export type TransformedRecordValue = string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL;
+export type TransformedRecordValue = string | number | boolean | null | undefined | typeof QUOTED_EMPTY_CELL;
 export type TransformedRecord = Record<string, TransformedRecordValue>;
 
 /** The built-in null tokens used when `nullValues` is not supplied. */
@@ -27,26 +27,27 @@ export function resolveNullSet(options: CsvParserOptions): Set<string> {
 
 /**
  * Whether any value transformation is configured. When false, records can be passed through as-is.
+ *
+ * `autoParseNumbers` and `autoParseBooleans` default to on, so transformation is skipped only when a
+ * caller explicitly disables both (and provides no `nullValues`).
  */
 export function needsValueTransformation(options: CsvParserOptions): boolean {
 	return Boolean(
-		options.autoParseNumbers ||
-		options.autoParseBooleans ||
-		options.valueTransformer ||
-		options.nullValues !== undefined
+		options.autoParseNumbers !== false || options.autoParseBooleans !== false || options.nullValues !== undefined
 	);
 }
 
 /**
  * Apply value transformations to a single record.
- * Transformation order: nullValues → autoParseNumbers → autoParseBooleans → valueTransformer.
+ * Transformation order: nullValues → autoParseNumbers → autoParseBooleans.
  *
- * Callers should guard with {@link needsValueTransformation} and skip this entirely when no
+ * `autoParseNumbers` and `autoParseBooleans` are treated as enabled unless explicitly set to
+ * `false`. Callers should guard with {@link needsValueTransformation} and skip this entirely when no
  * transformation is configured.
  *
  * @param keyMapper - Optional mapping applied to each record key before it is used as the output
- *   key and passed to `valueTransformer`. The buffered converter uses this to fuse header
- *   normalization (array-suffix stripping) into the same pass, avoiding a second full-record copy.
+ *   key. The buffered converter uses this to fuse header normalization (array-suffix stripping) into
+ *   the same pass, avoiding a second full-record copy.
  */
 export function transformRecordValues(
 	record: InternalCsvRecord,
@@ -54,14 +55,9 @@ export function transformRecordValues(
 	nullSet: Set<string>,
 	keyMapper?: (key: string) => string
 ): TransformedRecord {
-	const {
-		autoParseNumbers,
-		preserveUnsafeIntegersAsString,
-		autoParseBooleans,
-		valueTransformer,
-		nullValues,
-		nullRepresentation,
-	} = options;
+	const { preserveUnsafeIntegersAsString, nullValues, nullRepresentation } = options;
+	const autoParseNumbers = options.autoParseNumbers !== false;
+	const autoParseBooleans = options.autoParseBooleans !== false;
 
 	const transformed: TransformedRecord = {};
 
@@ -118,15 +114,6 @@ export function transformRecordValues(
 			if (parsed !== null) {
 				transformedValue = parsed;
 			}
-		}
-
-		// Step 3: Apply custom transformer
-		if (valueTransformer) {
-			transformedValue = valueTransformer(transformedValue as string | number | boolean, header) as
-				| string
-				| number
-				| boolean
-				| Date;
 		}
 
 		transformed[header] = transformedValue;

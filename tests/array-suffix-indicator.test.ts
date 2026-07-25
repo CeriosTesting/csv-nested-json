@@ -12,9 +12,9 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
-					children: [{ name: "Alice", age: "10" }],
+					children: [{ name: "Alice", age: 10 }],
 				},
 			]);
 		});
@@ -28,11 +28,11 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
 					children: [
-						{ name: "Alice", age: "10" },
-						{ name: "Bob", age: "8" },
+						{ name: "Alice", age: 10 },
+						{ name: "Bob", age: 8 },
 					],
 				},
 			]);
@@ -47,7 +47,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					company: "TechCorp",
 					departments: [
 						{
@@ -57,7 +57,7 @@ describe("Array Suffix Indicator", () => {
 					],
 				},
 				{
-					id: "2",
+					id: 2,
 					company: "OtherCorp",
 					departments: [
 						{
@@ -78,7 +78,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
 					tags: ["javascript", "typescript"],
 				},
@@ -93,7 +93,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
 					tags: ["javascript"],
 				},
@@ -112,9 +112,9 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
-					children: [{ name: "Alice", age: "10" }],
+					children: [{ name: "Alice", age: 10 }],
 				},
 			]);
 		});
@@ -129,9 +129,9 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
-					children: [{ name: "Alice", age: "10" }],
+					children: [{ name: "Alice", age: 10 }],
 				},
 			]);
 		});
@@ -147,9 +147,9 @@ describe("Array Suffix Indicator", () => {
 			// Without forced array, single object should remain with literal key
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
-					"children[]": { name: "Alice", age: "10" },
+					"children[]": { name: "Alice", age: 10 },
 				},
 			]);
 		});
@@ -164,7 +164,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
 				},
 			]);
@@ -180,7 +180,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
 					children: [],
 				},
@@ -199,12 +199,12 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
 					children: [],
 				},
 				{
-					id: "2",
+					id: 2,
 					name: "Jane",
 					children: [{ name: "Alice" }, { name: "Bob" }],
 				},
@@ -221,7 +221,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
 				},
 			]);
@@ -239,7 +239,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
 					children: [{ name: "Alice" }, { name: "Bob" }],
 					hobbies: ["reading", "swimming", "cycling"],
@@ -256,7 +256,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					company: "TechCorp",
 					projects: [
 						{
@@ -266,7 +266,7 @@ describe("Array Suffix Indicator", () => {
 					],
 				},
 				{
-					id: "2",
+					id: 2,
 					company: "OtherCorp",
 					projects: [
 						{
@@ -290,7 +290,7 @@ describe("Array Suffix Indicator", () => {
 			// Continuation row without projects[].name appends to existing project's tasks
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					company: "TechCorp",
 					projects: [
 						{
@@ -316,7 +316,7 @@ describe("Array Suffix Indicator", () => {
 			// Continuation row with projects[].name creates new project
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					company: "TechCorp",
 					projects: [
 						{
@@ -345,12 +345,12 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
 					phones: [{ type: "mobile", number: "555-0001" }],
 				},
 				{
-					id: "2",
+					id: 2,
 					name: "Jane",
 					phones: [
 						{ type: "home", number: "555-0002" },
@@ -358,7 +358,7 @@ describe("Array Suffix Indicator", () => {
 					],
 				},
 				{
-					id: "3",
+					id: 3,
 					name: "Bob",
 					phones: [],
 				},
@@ -374,10 +374,10 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					addresses: [
-						{ type: "home", location: { city: "NYC", zip: "10001" } },
-						{ location: { city: "LA", zip: "90001" } },
+						{ type: "home", location: { city: "NYC", zip: 10001 } },
+						{ location: { city: "LA", zip: 90001 } },
 					],
 				},
 			]);
@@ -394,11 +394,11 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					tags: ["javascript"],
 				},
 				{
-					id: "2",
+					id: 2,
 					tags: ["typescript"],
 				},
 			]);
@@ -413,7 +413,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					tags: ["javascript", "typescript"],
 				},
 			]);
@@ -430,7 +430,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					items: [{ value: "a" }, { value: "b" }],
 				},
 			]);
@@ -446,7 +446,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "John",
 					children: [{ name: "Alice" }],
 				},
@@ -464,7 +464,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					items: [{ name: "item1", tags: ["tag1", "tag2"] }],
 				},
 			]);
@@ -479,7 +479,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					items: [
 						{ name: "item1", tags: ["tag1"] },
 						{ name: "item2", tags: ["tag2"] },
@@ -499,7 +499,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					items: [
 						{ name: "item1", tags: ["tag1", "tag2", "tag3"] },
 						{ name: "item2", tags: ["tag4"] },
@@ -519,7 +519,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					a: [
 						{
 							name: "a1",
@@ -550,7 +550,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					measurements: [
 						{
 							code: "CODE1",
@@ -576,7 +576,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					a: [
 						{ name: "a1", b: [{ name: "b1", c: ["c1", "c2"] }] },
 						{ name: "a2", b: [{ name: "b2", c: ["c3", "c4"] }] },
@@ -595,7 +595,7 @@ describe("Array Suffix Indicator", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					items: [{ name: "item1", tags: ["tag1", "tag2"], colors: ["red", "blue"] }],
 				},
 			]);
@@ -611,7 +611,7 @@ describe("Array Suffix Indicator", () => {
 			// Row 2 has details.color value → creates new item
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					items: [
 						{ name: "item1", details: { color: "red" }, tags: ["tag1"] },
 						{ details: { color: "blue" }, tags: ["tag2"] },
@@ -648,7 +648,7 @@ Test1,A46,P1M
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					items: [{ name: "item1", tags: ["tag1"] }],
 				},
 			]);
@@ -665,7 +665,7 @@ Test1,A46,P1M
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					items: [{ tags: ["tag1", "tag2", "tag3"] }],
 				},
 			]);
