@@ -56,10 +56,13 @@
 		"format:check": "oxfmt --check",
 		"lint": "oxlint --type-aware --type-check",
 		"prepare": "husky",
+		"release": "changeset publish",
 		"test": "vitest --run",
 		"test:coverage": "vitest --coverage",
 		"test:watch": "vitest --watch",
-		"update-all-packages": "npx npm-check-updates -u && npm i"
+		"update-all-packages": "npx npm-check-updates -u && npm i",
+		"version-packages": "changeset version",
+		"version-packages:prepare-release": "npm run version-packages && npm run format"
 	},
 	"devDependencies": {
 		"@arethetypeswrong/cli": "^0.18.2",
