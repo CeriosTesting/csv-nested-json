@@ -13,17 +13,17 @@ and **[arrays require the `[]` suffix](#2-arrays-require-the--suffix)**.
 
 ## At a glance
 
-| Area                | v1 behavior                                             | v2 behavior                                                            |
-| ------------------- | ------------------------------------------------------- | --------------------------------------------------------------------- |
-| Number/boolean coercion | Off by default (strings)                            | **On by default** — pass `false` to opt out                           |
-| Arrays              | Auto-detected from repeated columns in continuation rows | **Require the `[]` header suffix**; repeats otherwise throw           |
-| `valueTransformer`, `headerTransformer`, `rowFilter`, `defaultValues` | Supported | **Removed** — transform the result instead                            |
-| `autoParseDates`    | Supported                                                | **Removed** — dates stay strings; convert after parsing               |
-| `autoParseNumbers`  | Coerced hex/octal/`+5`/padded values                    | **Stricter** — only plain decimal/float/scientific                    |
-| Mid-field quotes    | A `"` anywhere could open a quoted region               | **Quote is only special at field start** (RFC 4180)                   |
-| `delimiter` / `quote` | Multi-char values silently mis-parsed                 | **Must be single, distinct characters** or throws                     |
-| `CsvStreamParser` validation | Did not validate column counts                 | **Validates column counts** like the buffered parser                  |
-| `JsonToCsv` (`arrayMode: "rows"`) | Array headers had no suffix                | **Emits the `[]` suffix** so output re-parses into arrays             |
+| Area                                                                  | v1 behavior                                              | v2 behavior                                                 |
+| --------------------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------- |
+| Number/boolean coercion                                               | Off by default (strings)                                 | **On by default** — pass `false` to opt out                 |
+| Arrays                                                                | Auto-detected from repeated columns in continuation rows | **Require the `[]` header suffix**; repeats otherwise throw |
+| `valueTransformer`, `headerTransformer`, `rowFilter`, `defaultValues` | Supported                                                | **Removed** — transform the result instead                  |
+| `autoParseDates`                                                      | Supported                                                | **Removed** — dates stay strings; convert after parsing     |
+| `autoParseNumbers`                                                    | Coerced hex/octal/`+5`/padded values                     | **Stricter** — only plain decimal/float/scientific          |
+| Mid-field quotes                                                      | A `"` anywhere could open a quoted region                | **Quote is only special at field start** (RFC 4180)         |
+| `delimiter` / `quote`                                                 | Multi-char values silently mis-parsed                    | **Must be single, distinct characters** or throws           |
+| `CsvStreamParser` validation                                          | Did not validate column counts                           | **Validates column counts** like the buffered parser        |
+| `JsonToCsv` (`arrayMode: "rows"`)                                     | Array headers had no suffix                              | **Emits the `[]` suffix** so output re-parses into arrays   |
 
 ---
 
@@ -110,7 +110,7 @@ const result = CsvParser.parseString(csv)
 ```
 
 `columnMapping` is **retained** for renaming columns, but it now maps the **raw
-CSV header names** directly (in v1 it ran *after* a `headerTransformer`).
+CSV header names** directly (in v1 it ran _after_ a `headerTransformer`).
 
 ```ts
 CsvParser.parseString(csv, {
@@ -140,13 +140,13 @@ const rows = CsvParser.parseString(csv).map(r => ({
 Only plain decimal, float, and scientific-notation values are converted now.
 The following are **preserved as strings** in v2 (v1 coerced them):
 
-| Input      | v1                | v2 (string)  |
-| ---------- | ----------------- | ------------ |
-| `0x1F`     | `31`              | `"0x1F"`     |
-| `0b101`    | `5`               | `"0b101"`    |
-| `0o17`     | `15`              | `"0o17"`     |
-| `+5`       | `5`               | `"+5"`       |
-| `" 42 "`   | `42`              | `" 42 "`     |
+| Input    | v1   | v2 (string) |
+| -------- | ---- | ----------- |
+| `0x1F`   | `31` | `"0x1F"`    |
+| `0b101`  | `5`  | `"0b101"`   |
+| `0o17`   | `15` | `"0o17"`    |
+| `+5`     | `5`  | `"+5"`      |
+| `" 42 "` | `42` | `" 42 "`    |
 
 Plain values like `42`, `-3.14`, and `6.022e23` still coerce. Leading-zero codes
 (e.g. `007`) continue to be preserved as strings.
