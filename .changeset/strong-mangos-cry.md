@@ -32,13 +32,14 @@ number auto-parsing.
 
 - **Removed the `autoParseDates` option.** `Date.parse` recognition was too loose and
   locale-dependent, and was the root cause of mangled dates during JSON→CSV conversion.
-  Date-looking strings are now kept as plain strings. To produce `Date` objects, use a
-  `valueTransformer`:
+  Date-looking strings are now kept as plain strings. To produce `Date` objects, convert the
+  relevant columns after parsing:
 
   ```ts
-  CsvParser.parseString(csv, {
-  	valueTransformer: (value, header) => (header === "created" && typeof value === "string" ? new Date(value) : value),
-  });
+  const rows = CsvParser.parseString(csv).map(r => ({
+  	...r,
+  	created: typeof r.created === "string" ? new Date(r.created) : r.created,
+  }));
   ```
 
 - **`autoParseNumbers` is now stricter.** Only plain decimal/float/scientific-notation
@@ -50,8 +51,8 @@ number auto-parsing.
 
 - **`limit` now works in the non-streaming parser.** `CsvParser.parseString` /
   `parseFileSync` / `parseFile` previously ignored `limit` and returned all records. It
-  now caps the number of output records (applied after `rowFilter`, without splitting a
-  continuation-row group), matching `CsvStreamParser`.
+  now caps the number of output records (without splitting a continuation-row group),
+  matching `CsvStreamParser`.
 - **`JsonToCsv` now handles a custom `quote` character correctly.** Regex-special quote
   characters (`.`, `|`, `*`, etc.) were previously interpolated into a `RegExp` unescaped,
   producing corrupt output.

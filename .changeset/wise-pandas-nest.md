@@ -9,8 +9,7 @@ Add pagination and JSON→CSV output-control options.
 - **`offset` parser option** — skip the first N output records before collecting results. Composes
   with `limit` (offset first, then limit caps the remainder) so the two together select a window,
   useful for pagination. Like `limit`, it counts grouped output records (continuation-row groups map
-  to a single record and are never split) and is applied after `rowFilter`. Buffered and streaming
-  parsers produce identical windows.
+  to a single record and are never split). Buffered and streaming parsers produce identical windows.
 - **`JsonToCsv` `columns` option** — provide an explicit header list/order. Columns can be reordered,
   subset, or pinned; keys not listed are dropped and listed keys missing from a record become empty
   cells. May include the array suffix (e.g. `tags[]`) so `arrayMode: 'rows'` output re-parses into

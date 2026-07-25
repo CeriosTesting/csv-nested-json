@@ -346,13 +346,14 @@ export interface CsvParserOptions {
 
 	/**
 	 * Automatically convert numeric strings to numbers.
-	 * Applies to values that can be parsed as valid numbers.
-	 * @default false
+	 * Only plain decimal/float/scientific-notation values are converted; hex/octal/binary
+	 * literals, `+`-prefixed and whitespace-padded values, and leading-zero codes stay strings.
+	 * @default true
 	 *
 	 * @example
 	 * ```typescript
-	 * // '42' becomes 42, '3.14' becomes 3.14
-	 * CsvParser.parseString(csv, { autoParseNumbers: true });
+	 * // '42' becomes 42, '3.14' becomes 3.14; pass false to keep raw strings
+	 * CsvParser.parseString(csv, { autoParseNumbers: false });
 	 * ```
 	 */
 	autoParseNumbers?: boolean;
@@ -370,12 +371,12 @@ export interface CsvParserOptions {
 	/**
 	 * Automatically convert 'true'/'false' strings to booleans.
 	 * Case-insensitive matching.
-	 * @default false
+	 * @default true
 	 *
 	 * @example
 	 * ```typescript
-	 * // 'true' becomes true, 'FALSE' becomes false
-	 * CsvParser.parseString(csv, { autoParseBooleans: true });
+	 * // 'true' becomes true, 'FALSE' becomes false; pass false to keep raw strings
+	 * CsvParser.parseString(csv, { autoParseBooleans: false });
 	 * ```
 	 */
 	autoParseBooleans?: boolean;
@@ -471,8 +472,7 @@ export interface CsvParserOptions {
 	 * Number of output records to skip before collecting results.
 	 * Applied before {@link CsvParserOptions.limit}, so `offset` + `limit` together select a
 	 * window of records (useful for pagination). Like `limit`, this counts grouped output
-	 * records (continuation-row groups map to a single record and are never split), and it is
-	 * applied after {@link CsvParserOptions.rowFilter}.
+	 * records (continuation-row groups map to a single record and are never split).
 	 *
 	 * @default 0
 	 *

@@ -35,6 +35,10 @@ A powerful TypeScript CSV parser that transforms flat CSV data into nested JSON 
 npm install @cerios/csv-nested-json
 ```
 
+> **Upgrading from v1?** See the [Migration Guide](MIGRATION.md) — v2 makes type
+> coercion the default and requires the `[]` suffix for arrays, among other
+> breaking changes.
+
 ## 🎯 Quick Start
 
 ```typescript
