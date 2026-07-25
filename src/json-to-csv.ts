@@ -1,10 +1,18 @@
 import fs from "node:fs";
+
+import { assertDelimiterAndQuote } from "./option-validation";
 import type { CsvParserOptions, NestedObject, NestedValue } from "./types";
+
+/** UTF-8 byte order mark (U+FEFF), prepended to output when `writeBom` is enabled. */
+const UTF8_BOM = "﻿";
 
 /**
  * Options for JSON to CSV conversion.
  */
-export interface JsonToCsvOptions extends Pick<CsvParserOptions, "delimiter" | "quote" | "encoding" | "arrayMode"> {
+export interface JsonToCsvOptions extends Pick<
+	CsvParserOptions,
+	"delimiter" | "quote" | "encoding" | "arrayMode" | "arraySuffixIndicator"
+> {
 	/**
 	 * Line ending to use in output.
 	 * @default '\n'
@@ -16,6 +24,67 @@ export interface JsonToCsvOptions extends Pick<CsvParserOptions, "delimiter" | "
 	 * @default true
 	 */
 	includeHeader?: boolean;
+
+	/**
+	 * Wrap every field in the quote character, regardless of whether it contains a delimiter,
+	 * quote, or newline. Useful for consumers that require uniformly quoted output.
+	 * @default false
+	 */
+	quoteAll?: boolean;
+
+	/**
+	 * Prepend a UTF-8 byte order mark (`﻿`) to the output. Helps spreadsheet applications
+	 * (notably Excel) detect UTF-8 encoding when opening the file.
+	 * @default false
+	 */
+	writeBom?: boolean;
+
+	/**
+	 * Append a trailing line ending after the final row. When `false`, the output has no final
+	 * newline (matching the previous behavior).
+	 * @default false
+	 */
+	trailingNewline?: boolean;
+
+	/**
+	 * Explicit header columns, in the exact order they should appear. When provided, headers are
+	 * used as-is instead of being collected from the data, so columns can be reordered, subset, or
+	 * pinned. Keys not listed are dropped; listed keys missing from a record become empty cells.
+	 *
+	 * Columns may use dot-notation and the array suffix (e.g. `person.name`, `tags[]`) — for
+	 * `arrayMode: 'rows'` an array-owning column must carry the suffix so it re-parses as an array.
+	 *
+	 * @example
+	 * ```typescript
+	 * JsonToCsv.stringify(data, { columns: ['id', 'name', 'tags[]'] });
+	 * ```
+	 */
+	columns?: string[];
+
+	/**
+	 * Whether to sort auto-collected headers (primary keys first, then nested keys alphabetically).
+	 * When `false`, headers keep first-seen insertion order across the input records instead.
+	 * Ignored when {@link JsonToCsvOptions.columns} is provided.
+	 *
+	 * @default true
+	 */
+	sortHeaders?: boolean;
+
+	/**
+	 * String used to represent an explicit `null` value in output, so it can be distinguished from
+	 * an empty cell (`undefined`/missing always becomes an empty string). Defaults to `''`, matching
+	 * the previous behavior where `null` and empty were indistinguishable.
+	 *
+	 * @default ''
+	 *
+	 * @example
+	 * ```typescript
+	 * JsonToCsv.stringify([{ id: '1', note: null }], { nullValue: '\\N' });
+	 * // id,note
+	 * // 1,\N
+	 * ```
+	 */
+	nullValue?: string;
 }
 
 /**
@@ -74,34 +143,45 @@ export class JsonToCsv {
 
 		const delimiter = options.delimiter || ",";
 		const quote = options.quote || '"';
+		assertDelimiterAndQuote(delimiter, quote);
 		const lineEnding = options.lineEnding || "\n";
 		const includeHeader = options.includeHeader !== false;
 		const arrayMode = options.arrayMode || "rows";
+		const quoteAll = options.quoteAll === true;
 
-		// Collect all unique headers from all objects
-		const headers = this.collectHeaders(data);
+		// Only the continuation-row mode reconstructs arrays on re-parse, and that requires
+		// the array suffix in the header so the parser forces those columns back into arrays.
+		// In 'json' mode arrays live in a single cell, so no suffix is emitted.
+		const arraySuffix = arrayMode === "rows" ? (options.arraySuffixIndicator ?? "[]") : "";
+
+		// Use explicit columns when provided; otherwise collect unique headers from all objects.
+		const headers = options.columns ?? this.collectHeaders(data, arraySuffix, options.sortHeaders !== false);
 
 		// Build CSV rows
 		const rows: string[] = [];
 
 		// Add header row
 		if (includeHeader) {
-			rows.push(headers.map(h => this.escapeValue(h, delimiter, quote)).join(delimiter));
+			rows.push(headers.map(h => this.escapeValue(h, delimiter, quote, quoteAll)).join(delimiter));
 		}
 
 		// Add data rows
 		for (const obj of data) {
-			const flatRows = this.flattenObject(obj, headers, arrayMode);
+			const flatRows = this.flattenObject(obj, headers, arrayMode, arraySuffix, options.nullValue ?? "");
 			for (const flatRow of flatRows) {
 				const values = headers.map(header => {
 					const value = flatRow[header];
-					return this.escapeValue(value, delimiter, quote);
+					return this.escapeValue(value, delimiter, quote, quoteAll);
 				});
 				rows.push(values.join(delimiter));
 			}
 		}
 
-		return rows.join(lineEnding);
+		let output = rows.join(lineEnding);
+		if (options.trailingNewline) output += lineEnding;
+		// Prepend a UTF-8 BOM so spreadsheet apps (Excel) detect UTF-8 reliably.
+		if (options.writeBom) output = UTF8_BOM + output;
+		return output;
 	}
 
 	/**
@@ -142,40 +222,109 @@ export class JsonToCsv {
 	}
 
 	/**
+	 * Resolve the header columns for a set of records, honoring `arrayMode`/`arraySuffixIndicator`.
+	 *
+	 * @internal Used by {@link JsonToCsvStream} to derive headers from the first record(s).
+	 */
+	static resolveHeaders(data: NestedObject[], options: JsonToCsvOptions = {}): string[] {
+		if (options.columns) return options.columns;
+		const arrayMode = options.arrayMode || "rows";
+		const arraySuffix = arrayMode === "rows" ? (options.arraySuffixIndicator ?? "[]") : "";
+		return this.collectHeaders(data, arraySuffix, options.sortHeaders !== false);
+	}
+
+	/**
+	 * Build the escaped header line for a fixed set of columns.
+	 *
+	 * @internal Used by {@link JsonToCsvStream}.
+	 */
+	static headerLine(headers: string[], options: JsonToCsvOptions = {}): string {
+		const delimiter = options.delimiter || ",";
+		const quote = options.quote || '"';
+		assertDelimiterAndQuote(delimiter, quote);
+		const quoteAll = options.quoteAll === true;
+		return headers.map(h => this.escapeValue(h, delimiter, quote, quoteAll)).join(delimiter);
+	}
+
+	/**
+	 * Build the CSV line(s) for a single object against a fixed set of headers. In `rows` array
+	 * mode an object may produce multiple continuation lines.
+	 *
+	 * @internal Used by {@link JsonToCsvStream}.
+	 */
+	static objectToCsvLines(obj: NestedObject, headers: string[], options: JsonToCsvOptions = {}): string[] {
+		const delimiter = options.delimiter || ",";
+		const quote = options.quote || '"';
+		assertDelimiterAndQuote(delimiter, quote);
+		const arrayMode = options.arrayMode || "rows";
+		const arraySuffix = arrayMode === "rows" ? (options.arraySuffixIndicator ?? "[]") : "";
+		const quoteAll = options.quoteAll === true;
+
+		const flatRows = this.flattenObject(obj, headers, arrayMode, arraySuffix, options.nullValue ?? "");
+		return flatRows.map(flatRow =>
+			headers.map(header => this.escapeValue(flatRow[header], delimiter, quote, quoteAll)).join(delimiter)
+		);
+	}
+
+	/**
 	 * Collect all unique headers from an array of nested objects.
 	 * Headers are generated using dot-notation for nested properties.
 	 */
-	private static collectHeaders(data: NestedObject[]): string[] {
+	private static collectHeaders(data: NestedObject[], arraySuffix: string, sort = true): string[] {
 		const headerSet = new Set<string>();
 
 		for (const obj of data) {
-			this.collectHeadersFromObject(obj, "", headerSet);
+			this.collectHeadersFromObject(obj, "", headerSet, arraySuffix);
 		}
 
-		// Sort headers for consistent output
-		// Primary keys (no dots) first, then nested keys
-		const headers = Array.from(headerSet);
-		headers.sort((a, b) => {
-			const aDepth = a.split(".").length;
-			const bDepth = b.split(".").length;
-			if (aDepth !== bDepth) return aDepth - bDepth;
-			return a.localeCompare(b);
+		// Without sorting, preserve first-seen insertion order across the input records.
+		if (!sort) {
+			return Array.from(headerSet);
+		}
+
+		// Sort headers for consistent output: primary keys (no dots) first, then nested keys.
+		// Precompute each header's depth once (via a decorate-sort-undecorate) so the comparator
+		// does not re-split every header O(n log n) times.
+		const decorated = Array.from(headerSet, header => ({ header, depth: this.countSegments(header) }));
+		decorated.sort((a, b) => {
+			if (a.depth !== b.depth) return a.depth - b.depth;
+			return a.header.localeCompare(b.header);
 		});
 
-		return headers;
+		return decorated.map(entry => entry.header);
+	}
+
+	/**
+	 * Count dot-separated segments in a header (i.e. its nesting depth) without allocating
+	 * an intermediate array via `split`.
+	 */
+	private static countSegments(header: string): number {
+		let count = 1;
+		for (let i = 0; i < header.length; i++) {
+			if (header[i] === ".") count++;
+		}
+		return count;
 	}
 
 	/**
 	 * Recursively collect headers from a nested object.
 	 */
-	private static collectHeadersFromObject(obj: NestedObject, prefix: string, headers: Set<string>): void {
+	private static collectHeadersFromObject(
+		obj: NestedObject,
+		prefix: string,
+		headers: Set<string>,
+		arraySuffix: string
+	): void {
 		for (const [key, value] of Object.entries(obj)) {
 			const fullKey = prefix ? `${prefix}.${key}` : key;
 
 			if (Array.isArray(value)) {
+				// Mark the array-owning segment with the suffix so it re-parses as an array.
+				const arrayKey = `${fullKey}${arraySuffix}`;
+
 				if (value.length === 0) {
 					// Empty array - still add the header
-					headers.add(fullKey);
+					headers.add(arrayKey);
 					continue;
 				}
 
@@ -183,19 +332,19 @@ export class JsonToCsv {
 				for (const item of value) {
 					if (item && typeof item === "object" && !Array.isArray(item)) {
 						hasObjectItems = true;
-						this.collectHeadersFromObject(item as NestedObject, fullKey, headers);
+						this.collectHeadersFromObject(item as NestedObject, arrayKey, headers, arraySuffix);
 					}
 				}
 
 				if (!hasObjectItems) {
 					// Array of primitives
-					headers.add(fullKey);
+					headers.add(arrayKey);
 				}
-			} else if (value && typeof value === "object") {
+			} else if (value && typeof value === "object" && !(value instanceof Date)) {
 				// Nested object
-				this.collectHeadersFromObject(value as NestedObject, fullKey, headers);
+				this.collectHeadersFromObject(value as NestedObject, fullKey, headers, arraySuffix);
 			} else {
-				// Primitive value
+				// Primitive value (or Date, treated as a scalar)
 				headers.add(fullKey);
 			}
 		}
@@ -208,20 +357,22 @@ export class JsonToCsv {
 	private static flattenObject(
 		obj: NestedObject,
 		headers: string[],
-		arrayMode: "rows" | "json"
+		arrayMode: "rows" | "json",
+		arraySuffix: string,
+		nullValue = ""
 	): Record<string, string>[] {
 		// First, flatten the object to get all paths and values
 		const flatValues: Record<string, NestedValue> = {};
 		const arrayValues: Record<string, NestedValue[]> = {};
 
-		this.flattenToPathValues(obj, "", flatValues, arrayValues);
+		this.flattenToPathValues(obj, "", flatValues, arrayValues, arraySuffix);
 
 		// If no arrays or arrayMode is 'json', return single row
 		if (Object.keys(arrayValues).length === 0 || arrayMode === "json") {
 			const row: Record<string, string> = {};
 			for (const header of headers) {
 				if (header in flatValues) {
-					row[header] = this.valueToString(flatValues[header]);
+					row[header] = this.valueToString(flatValues[header], nullValue);
 				} else if (header in arrayValues) {
 					// JSON-stringify the array
 					row[header] = JSON.stringify(arrayValues[header]);
@@ -233,7 +384,7 @@ export class JsonToCsv {
 		}
 
 		// ArrayMode is 'rows' - generate continuation rows
-		return this.generateContinuationRows(headers, flatValues, arrayValues);
+		return this.generateContinuationRows(headers, flatValues, arrayValues, arraySuffix, nullValue);
 	}
 
 	/**
@@ -243,23 +394,19 @@ export class JsonToCsv {
 		obj: NestedObject,
 		prefix: string,
 		flatValues: Record<string, NestedValue>,
-		arrayValues: Record<string, NestedValue[]>
+		arrayValues: Record<string, NestedValue[]>,
+		arraySuffix: string
 	): void {
 		for (const [key, value] of Object.entries(obj)) {
 			const fullKey = prefix ? `${prefix}.${key}` : key;
 
 			if (Array.isArray(value)) {
-				// Check if array of objects or primitives
-				if (value.length > 0 && typeof value[0] === "object" && value[0] !== null && !Array.isArray(value[0])) {
-					// Array of objects - need to handle specially
-					arrayValues[fullKey] = value;
-				} else {
-					// Array of primitives
-					arrayValues[fullKey] = value;
-				}
-			} else if (value && typeof value === "object") {
-				this.flattenToPathValues(value as NestedObject, fullKey, flatValues, arrayValues);
+				// Key array values by the suffixed path so they align with the emitted headers.
+				arrayValues[`${fullKey}${arraySuffix}`] = value;
+			} else if (value && typeof value === "object" && !(value instanceof Date)) {
+				this.flattenToPathValues(value as NestedObject, fullKey, flatValues, arrayValues, arraySuffix);
 			} else {
+				// Primitive value (or Date, treated as a scalar)
 				flatValues[fullKey] = value;
 			}
 		}
@@ -272,7 +419,9 @@ export class JsonToCsv {
 	private static generateContinuationRows(
 		headers: string[],
 		flatValues: Record<string, NestedValue>,
-		arrayValues: Record<string, NestedValue[]>
+		arrayValues: Record<string, NestedValue[]>,
+		arraySuffix: string,
+		nullValue = ""
 	): Record<string, string>[] {
 		const arrayPaths = Object.keys(arrayValues).sort((a, b) => b.length - a.length);
 
@@ -284,24 +433,31 @@ export class JsonToCsv {
 			}
 		}
 
+		// The owning array path for each header is invariant across rows, so resolve it once
+		// instead of re-scanning arrayPaths for every header on every continuation row.
+		const arrayPathByHeader = new Map<string, string | null>();
+		for (const header of headers) {
+			arrayPathByHeader.set(header, this.findArrayPathForHeader(header, arrayPaths));
+		}
+
 		const rows: Record<string, string>[] = [];
 
 		for (let i = 0; i < maxArrayLength; i++) {
 			const row: Record<string, string> = {};
 
 			for (const header of headers) {
-				const arrayPath = this.findArrayPathForHeader(header, arrayPaths);
+				const arrayPath = arrayPathByHeader.get(header) ?? null;
 
 				if (arrayPath) {
 					const arr = arrayValues[arrayPath];
 					if (i < arr.length) {
 						const item = arr[i];
 						if (header === arrayPath) {
-							row[header] = this.valueToString(item as NestedValue);
+							row[header] = this.valueToString(item as NestedValue, nullValue);
 						} else if (item && typeof item === "object" && !Array.isArray(item)) {
 							const relativePath = header.slice(arrayPath.length + 1);
-							const nestedValue = this.getNestedValueAtPath(item as NestedObject, relativePath);
-							row[header] = nestedValue === undefined ? "" : this.valueToString(nestedValue);
+							const nestedValue = this.getNestedValueAtPath(item as NestedObject, relativePath, arraySuffix);
+							row[header] = nestedValue === undefined ? "" : this.valueToString(nestedValue, nullValue);
 						} else {
 							row[header] = "";
 						}
@@ -310,7 +466,7 @@ export class JsonToCsv {
 					}
 				} else if (i === 0 && header in flatValues) {
 					// Non-array values only appear in first row
-					row[header] = this.valueToString(flatValues[header]);
+					row[header] = this.valueToString(flatValues[header], nullValue);
 				} else if (!(header in row)) {
 					row[header] = "";
 				}
@@ -338,7 +494,7 @@ export class JsonToCsv {
 	/**
 	 * Read a nested value from an object using dot-notation.
 	 */
-	private static getNestedValueAtPath(obj: NestedObject, path: string): NestedValue | undefined {
+	private static getNestedValueAtPath(obj: NestedObject, path: string, arraySuffix = ""): NestedValue | undefined {
 		if (!path) return obj;
 
 		const parts = path.split(".");
@@ -350,7 +506,9 @@ export class JsonToCsv {
 				return undefined;
 			}
 
-			current = (current as NestedObject)[part];
+			// Header segments carry the array suffix (e.g. `tags[]`) but object keys do not.
+			const key = arraySuffix && part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part;
+			current = (current as NestedObject)[key];
 		}
 
 		return current;
@@ -358,10 +516,20 @@ export class JsonToCsv {
 
 	/**
 	 * Convert a value to string for CSV output.
+	 *
+	 * `nullValue` is emitted for an explicit `null` so it can be distinguished from an empty cell
+	 * on re-parse; `undefined` (a missing value) always becomes an empty string.
 	 */
-	private static valueToString(value: NestedValue): string {
-		if (value === null || value === undefined) {
+	private static valueToString(value: NestedValue, nullValue = ""): string {
+		if (value === null) {
+			return nullValue;
+		}
+		if (value === undefined) {
 			return "";
+		}
+		if (value instanceof Date) {
+			// Invalid dates stringify to "Invalid Date" via toISOString throwing; guard it.
+			return Number.isNaN(value.getTime()) ? "" : value.toISOString();
 		}
 		if (typeof value === "object") {
 			return JSON.stringify(value);
@@ -373,19 +541,27 @@ export class JsonToCsv {
 	 * Escape a value for CSV output.
 	 * Wraps in quotes if the value contains delimiter, quote, or newline.
 	 */
-	private static escapeValue(value: string | undefined | null, delimiter: string, quote: string): string {
+	private static escapeValue(
+		value: string | undefined | null,
+		delimiter: string,
+		quote: string,
+		quoteAll = false
+	): string {
 		if (value === undefined || value === null) {
-			return "";
+			// An empty cell is still force-wrapped under quoteAll so every column is quoted uniformly.
+			return quoteAll ? quote + quote : "";
 		}
 
 		const str = String(value);
 
 		// Check if escaping is needed
-		const needsEscape = str.includes(delimiter) || str.includes(quote) || str.includes("\n") || str.includes("\r");
+		const needsEscape =
+			quoteAll || str.includes(delimiter) || str.includes(quote) || str.includes("\n") || str.includes("\r");
 
 		if (needsEscape) {
-			// Escape quotes by doubling them
-			const escaped = str.replace(new RegExp(quote, "g"), quote + quote);
+			// Escape quotes by doubling them. Use split/join so a regex-special quote
+			// character (e.g. ".", "|", "*") is treated literally.
+			const escaped = str.split(quote).join(quote + quote);
 			return quote + escaped + quote;
 		}
 

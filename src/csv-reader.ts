@@ -2,11 +2,11 @@ import { CsvDuplicateHeaderError, CsvValidationError } from "./errors";
 import {
 	type InternalCsvCellValue,
 	type InternalCsvRecord,
-	isEmptyCsvCellValue,
 	QUOTED_EMPTY_CELL,
 	toPublicCsvCellValue,
 } from "./internal-empty-cell";
-import type { CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, ValidationMode } from "./types";
+import { assertDelimiterAndQuote, isLeadingSpaceOnly } from "./option-validation";
+import type { CsvErrorSink, CsvParserOptions, CsvRecord, DuplicateHeaderStrategy, ValidationMode } from "./types";
 
 /**
  * Low-level CSV parsing utilities.
@@ -48,16 +48,23 @@ export class CsvReader {
 	/**
 	 * Parse CSV content with internal quoted-empty provenance tracking.
 	 *
+	 * @param errorSink - When provided, per-row validation failures are reported here and the row is
+	 *   skipped instead of throwing (used by the `*Safe` parser methods).
 	 * @internal
 	 */
-	static parseWithQuotedEmptyProvenance(content: string, options: CsvParserOptions = {}): InternalCsvRecord[] {
-		return this.parseInternal(content, options, true);
+	static parseWithQuotedEmptyProvenance(
+		content: string,
+		options: CsvParserOptions = {},
+		errorSink?: CsvErrorSink
+	): InternalCsvRecord[] {
+		return this.parseInternal(content, options, true, errorSink);
 	}
 
 	private static parseInternal(
 		content: string,
 		options: CsvParserOptions,
-		preserveQuotedEmpty: boolean
+		preserveQuotedEmpty: boolean,
+		errorSink?: CsvErrorSink
 	): InternalCsvRecord[] {
 		if (!content || content.trim() === "") {
 			return [];
@@ -73,18 +80,33 @@ export class CsvReader {
 		const validationMode = options.validationMode || "warn";
 		const delimiter = options.delimiter || ",";
 		const quote = options.quote || '"';
+		assertDelimiterAndQuote(delimiter, quote);
 		const skipRows = options.skipRows || 0;
+		const commentPrefix = options.commentPrefix;
+		const trimValues = options.trimValues === true;
+		const trimLeadingSpace = options.trimLeadingSpace === true;
 
-		const lines = this.splitLines(processedContent, quote);
+		// Single-pass tokenize: split into rows of cells in one scan, instead of building an
+		// intermediate array of line strings (splitLines) and then re-scanning each line (parseLine).
+		const rows = this.tokenize(
+			processedContent,
+			delimiter,
+			quote,
+			preserveQuotedEmpty,
+			commentPrefix,
+			trimValues,
+			trimLeadingSpace
+		);
 
-		if (lines.length === 0) return [];
+		if (rows.length === 0) return [];
 
 		// Skip initial rows if specified
 		const dataStartIndex = skipRows;
-		if (dataStartIndex >= lines.length) return [];
+		if (dataStartIndex >= rows.length) return [];
 
-		// Parse header (first line after skipped rows)
-		const originalHeaders = this.parseLine(lines[dataStartIndex], delimiter, quote);
+		// Header cells (first row after skipped rows). Headers are always plain strings, so a
+		// quoted-empty header cell collapses to "" rather than the internal sentinel.
+		const originalHeaders = rows[dataStartIndex].cells.map(cell => toPublicCsvCellValue(cell));
 		if (originalHeaders.length === 0) return [];
 
 		// Apply column filtering FIRST (based on original header names)
@@ -94,13 +116,8 @@ export class CsvReader {
 			validationMode
 		);
 
-		// Apply header transformer if specified
+		// Apply column mapping if specified (based on the raw/filtered header names)
 		let headers = filteredOriginalHeaders;
-		if (options.headerTransformer) {
-			headers = headers.map(options.headerTransformer);
-		}
-
-		// Apply column mapping if specified (based on transformed header names)
 		if (options.columnMapping) {
 			headers = headers.map(h => options.columnMapping?.[h] ?? h);
 		}
@@ -116,12 +133,10 @@ export class CsvReader {
 
 		// Parse data rows
 		const records: InternalCsvRecord[] = [];
-		let dataRowIndex = 0;
-		for (let i = dataStartIndex + 1; i < lines.length; i++) {
-			const line = lines[i].trim();
-			if (line === "") continue; // Skip empty lines
+		for (let i = dataStartIndex + 1; i < rows.length; i++) {
+			if (rows[i].blank) continue; // Skip empty lines (raw line was whitespace-only)
 
-			const values = this.parseLine(lines[i], delimiter, quote, preserveQuotedEmpty);
+			const values = rows[i].cells;
 
 			// Validate column count
 			if (values.length > headers.length && validationMode !== "ignore") {
@@ -129,23 +144,31 @@ export class CsvReader {
 				const message = `Row ${lineNumber} has ${values.length} values but only ${headers.length} columns defined. Extra values will be ignored.`;
 
 				if (validationMode === "error") {
+					// In `*Safe` mode, collect and skip instead of aborting the whole parse.
+					if (errorSink) {
+						errorSink({ row: lineNumber, column: headers.length + 1, code: "validation", message });
+						continue;
+					}
 					throw new CsvValidationError(message, lineNumber, headers.length, values.length);
 				}
 				if (validationMode === "warn") {
-					// biome-ignore lint/suspicious/noConsole: User explicitly requested warning mode
 					console.warn(`Warning: ${message}`);
 				}
 			}
 
-			const record = this.createRecord(values, headers, includedIndices, duplicateIndices, dupStrategy, options);
-
-			// Apply row filter if specified
-			const rowFilterRecord = preserveQuotedEmpty ? this.toPublicRecord(record) : (record as CsvRecord);
-			if (options.rowFilter && !options.rowFilter(rowFilterRecord, dataRowIndex)) {
-				dataRowIndex++;
-				continue;
+			// Too-few-columns is only enforced in strict 'error' mode. Missing trailing cells are
+			// commonly intentional (padded with empty), so 'warn'/'ignore' stay lenient.
+			if (values.length < headers.length && validationMode === "error") {
+				const lineNumber = i + 1;
+				const message = `Row ${lineNumber} has ${values.length} values but ${headers.length} columns are defined.`;
+				if (errorSink) {
+					errorSink({ row: lineNumber, column: values.length + 1, code: "validation", message });
+					continue;
+				}
+				throw new CsvValidationError(message, lineNumber, headers.length, values.length);
 			}
-			dataRowIndex++;
+
+			const record = this.createRecord(values, headers, includedIndices, duplicateIndices, dupStrategy);
 
 			records.push(record);
 		}
@@ -153,23 +176,124 @@ export class CsvReader {
 		return records;
 	}
 
+	/**
+	 * Tokenize CSV content into rows of cells in a single pass.
+	 *
+	 * Each returned entry carries the parsed `cells` and a `blank` flag indicating the raw line
+	 * was whitespace-only (so it should be skipped as an empty line, matching the previous
+	 * `splitLines`/`parseLine` behavior). Rows are emitted 1:1 with source lines (blank lines
+	 * included) so that `skipRows` and error line numbers stay aligned. A trailing empty line
+	 * produced by a final line terminator is dropped.
+	 */
+	private static tokenize(
+		content: string,
+		delimiter: string,
+		quote: string,
+		preserveQuotedEmpty: boolean,
+		commentPrefix?: string,
+		trimValues = false,
+		trimLeadingSpace = false
+	): { cells: InternalCsvCellValue[]; blank: boolean }[] {
+		const hasComments = commentPrefix !== undefined && commentPrefix !== "";
+
+		// Fast path: without any quote character, no field can contain a delimiter or span a line
+		// boundary, so native splitting is exact and far faster than manual accumulation.
+		if (content.indexOf(quote) === -1) {
+			const lines = content.split(/\r\n|\n|\r/);
+			if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+
+			const result: { cells: InternalCsvCellValue[]; blank: boolean }[] = [];
+			for (const line of lines) {
+				if (hasComments && line.startsWith(commentPrefix)) continue;
+				let lineCells: InternalCsvCellValue[] = line.split(delimiter);
+				if (trimValues) lineCells = (lineCells as string[]).map(cell => cell.trim());
+				result.push({ cells: lineCells, blank: line.trim() === "" });
+			}
+			return result;
+		}
+
+		const rows: { cells: InternalCsvCellValue[]; blank: boolean }[] = [];
+		let cells: InternalCsvCellValue[] = [];
+		let currentValue = "";
+		let insideQuotes = false;
+		let fieldWasQuoted = false;
+		let lineStart = 0;
+
+		for (let i = 0; i < content.length; i++) {
+			// Skip a full comment line without tokenizing it. Checked only at the start of a line so
+			// the prefix must be the line's first character(s); this also prevents a stray quote in a
+			// comment from swallowing the following line.
+			if (hasComments && i === lineStart && !insideQuotes && content.startsWith(commentPrefix, i)) {
+				let j = i;
+				while (j < content.length && content[j] !== "\n" && content[j] !== "\r") j++;
+				if (content[j] === "\r" && content[j + 1] === "\n") j++; // Consume the \n of a CRLF pair
+				i = j;
+				lineStart = i + 1;
+				continue;
+			}
+
+			const char = content[i];
+
+			if (char === quote) {
+				if (insideQuotes) {
+					if (content[i + 1] === quote) {
+						// Escaped quote inside a quoted field
+						currentValue += quote;
+						i++;
+					} else {
+						// Closing quote
+						insideQuotes = false;
+					}
+				} else if (!fieldWasQuoted && (currentValue === "" || (trimLeadingSpace && isLeadingSpaceOnly(currentValue)))) {
+					// Opening quote (only special at the start of a field, per RFC 4180). With
+					// trimLeadingSpace, leading spaces before the quote are discarded so the quote
+					// still opens the field.
+					currentValue = "";
+					insideQuotes = true;
+					fieldWasQuoted = true;
+				} else {
+					// A quote in the middle of an unquoted field is a literal character
+					currentValue += quote;
+				}
+			} else if (char === delimiter && !insideQuotes) {
+				cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty, trimValues));
+				currentValue = "";
+				fieldWasQuoted = false;
+			} else if ((char === "\n" || char === "\r") && !insideQuotes) {
+				const lineEnd = i;
+				if (char === "\r" && content[i + 1] === "\n") i++; // Consume the \n of a CRLF pair
+				cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty, trimValues));
+				rows.push({ cells, blank: content.slice(lineStart, lineEnd).trim() === "" });
+				cells = [];
+				currentValue = "";
+				fieldWasQuoted = false;
+				lineStart = i + 1;
+			} else {
+				currentValue += char;
+			}
+		}
+
+		// Emit the final line only when the content did not end on a line terminator.
+		if (lineStart < content.length || cells.length > 0 || currentValue !== "") {
+			cells.push(this.finalizeParsedCellValue(currentValue, fieldWasQuoted, preserveQuotedEmpty, trimValues));
+			rows.push({ cells, blank: content.slice(lineStart).trim() === "" });
+		}
+
+		return rows;
+	}
+
 	private static createRecord(
 		values: InternalCsvCellValue[],
 		headers: string[],
 		includedIndices: number[],
 		duplicateIndices: Set<number>,
-		dupStrategy: DuplicateHeaderStrategy,
-		options: CsvParserOptions
+		dupStrategy: DuplicateHeaderStrategy
 	): InternalCsvRecord {
 		const record: InternalCsvRecord = {};
 
 		for (let j = 0; j < headers.length; j++) {
 			const originalIndex = includedIndices[j];
-			let value: InternalCsvCellValue = originalIndex < values.length ? values[originalIndex] : "";
-
-			if (isEmptyCsvCellValue(value) && options.defaultValues?.[headers[j]] !== undefined) {
-				value = options.defaultValues[headers[j]];
-			}
+			const value: InternalCsvCellValue = originalIndex < values.length ? values[originalIndex] : "";
 
 			const header = headers[j];
 
@@ -198,16 +322,6 @@ export class CsvReader {
 		return record;
 	}
 
-	private static toPublicRecord(record: InternalCsvRecord): CsvRecord {
-		const publicRecord: CsvRecord = {};
-
-		for (const [header, value] of Object.entries(record)) {
-			publicRecord[header] = toPublicCsvCellValue(value);
-		}
-
-		return publicRecord;
-	}
-
 	/**
 	 * Strip BOM (Byte Order Mark) from the beginning of content.
 	 * Handles UTF-8 and UTF-16 BOMs.
@@ -224,12 +338,13 @@ export class CsvReader {
 	static stripBom(content: string): string {
 		if (content.length === 0) return content;
 
-		// Check for UTF-8 BOM or UTF-16 BE BOM (both are \uFEFF when decoded)
+		// Normal case: a correctly decoded UTF-8 or UTF-16 BOM is U+FEFF.
 		if (content.charCodeAt(0) === 0xfeff) {
 			return content.slice(1);
 		}
 
-		// Check for UTF-16 LE BOM (\uFFFE when decoded as UTF-8)
+		// Byte-swapped BOM: U+FFFE appears when a UTF-16BE file is decoded as UTF-16LE (Node has no
+		// native utf-16be encoding). Strip it defensively so the leading noncharacter is not kept.
 		if (content.charCodeAt(0) === 0xfffe) {
 			return content.slice(1);
 		}
@@ -239,6 +354,10 @@ export class CsvReader {
 
 	/**
 	 * Split CSV content into lines, respecting quoted fields that may contain newlines.
+	 *
+	 * @deprecated No longer used internally — {@link CsvReader.parse} tokenizes rows and cells in a
+	 *   single pass. Retained for backward compatibility; prefer {@link CsvParser} or
+	 *   {@link CsvReader.parse}. May be removed in a future major.
 	 *
 	 * @param content - The CSV content
 	 * @param quote - The quote character (default: '"')
@@ -251,6 +370,16 @@ export class CsvReader {
 	 * ```
 	 */
 	static splitLines(content: string, quote = '"'): string[] {
+		// Fast path: without a quote character no field can span a line boundary, so a native
+		// split on line terminators is exact. The manual scan below drops the single empty
+		// segment produced by a trailing terminator, so replicate that by popping it here.
+		if (content.indexOf(quote) === -1) {
+			if (content === "") return [];
+			const parts = content.split(/\r\n|\n|\r/);
+			if (parts[parts.length - 1] === "") parts.pop();
+			return parts;
+		}
+
 		const lines: string[] = [];
 		let currentLine = "";
 		let insideQuotes = false;
@@ -293,6 +422,10 @@ export class CsvReader {
 	/**
 	 * Parse a single CSV line into an array of values, respecting quotes and delimiters.
 	 *
+	 * @deprecated No longer used internally — {@link CsvReader.parse} tokenizes rows and cells in a
+	 *   single pass. Retained for backward compatibility; prefer {@link CsvParser} or
+	 *   {@link CsvReader.parse}. May be removed in a future major.
+	 *
 	 * @param line - A single line of CSV data
 	 * @param delimiter - The field delimiter (default: ',')
 	 * @param quote - The quote character (default: '"')
@@ -316,6 +449,12 @@ export class CsvReader {
 		preserveQuotedEmpty: boolean
 	): InternalCsvCellValue[];
 	static parseLine(line: string, delimiter = ",", quote = '"', preserveQuotedEmpty = false): InternalCsvCellValue[] {
+		// Fast path: a line with no quote character has no quoted fields, so a native split is
+		// exact (no field was quoted, so finalizeParsedCellValue would be a no-op anyway).
+		if (line.indexOf(quote) === -1) {
+			return line.split(delimiter);
+		}
+
 		const values: InternalCsvCellValue[] = [];
 		let currentValue = "";
 		let insideQuotes = false;
@@ -326,14 +465,22 @@ export class CsvReader {
 			const nextChar = i + 1 < line.length ? line[i + 1] : "";
 
 			if (char === quote) {
-				if (insideQuotes && nextChar === quote) {
-					// Escaped quote
-					currentValue += quote;
-					i++; // Skip the next quote
-				} else {
-					// Toggle quote state
-					insideQuotes = !insideQuotes;
+				if (insideQuotes) {
+					if (nextChar === quote) {
+						// Escaped quote inside a quoted field
+						currentValue += quote;
+						i++; // Skip the next quote
+					} else {
+						// Closing quote
+						insideQuotes = false;
+					}
+				} else if (currentValue === "" && !fieldWasQuoted) {
+					// Opening quote (only special at the start of a field, per RFC 4180)
+					insideQuotes = true;
 					fieldWasQuoted = true;
+				} else {
+					// A quote in the middle of an unquoted field is a literal character
+					currentValue += quote;
 				}
 			} else if (char === delimiter && !insideQuotes) {
 				// Field delimiter
@@ -354,8 +501,14 @@ export class CsvReader {
 	private static finalizeParsedCellValue(
 		value: string,
 		fieldWasQuoted: boolean,
-		preserveQuotedEmpty: boolean
+		preserveQuotedEmpty: boolean,
+		trimValues = false
 	): InternalCsvCellValue {
+		// Trim only unquoted fields so quoted whitespace is preserved verbatim.
+		if (trimValues && !fieldWasQuoted) {
+			value = value.trim();
+		}
+
 		if (preserveQuotedEmpty && fieldWasQuoted && value === "") {
 			return QUOTED_EMPTY_CELL;
 		}
@@ -473,7 +626,6 @@ export class CsvReader {
 				if (!headerSet.has(col) && validationMode !== "ignore") {
 					const message = `Column '${col}' specified in includeColumns does not exist in the CSV headers.`;
 					if (validationMode === "warn") {
-						// biome-ignore lint/suspicious/noConsole: User explicitly requested warning mode
 						console.warn(`Warning: ${message}`);
 					}
 					// Note: we don't throw for 'error' mode here, just warn - it's not a fatal issue

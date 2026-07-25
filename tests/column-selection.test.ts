@@ -1,4 +1,7 @@
 import { Readable } from "node:stream";
+
+import { describe, expect, it, vi } from "vitest";
+
 import { CsvParseError, CsvReader, CsvStreamParser, NestedJsonConverter } from "../src";
 import type { NestedObject } from "../src/types";
 
@@ -20,7 +23,7 @@ describe("Column Selection/Exclusion", () => {
 		});
 
 		it("should warn for missing columns in includeColumns", () => {
-			const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			const csv = "id,name,email\n1,John,john@test.com";
 			CsvReader.parse(csv, {
 				includeColumns: ["id", "nonexistent", "name"],
@@ -33,7 +36,7 @@ describe("Column Selection/Exclusion", () => {
 		});
 
 		it("should handle all columns missing from includeColumns", () => {
-			const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			const csv = "id,name,email\n1,John,john@test.com";
 			const result = CsvReader.parse(csv, { includeColumns: ["missing1", "missing2"] });
 
@@ -67,7 +70,7 @@ describe("Column Selection/Exclusion", () => {
 		});
 
 		it("should handle non-existent columns in excludeColumns silently", () => {
-			const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			const csv = "id,name,email\n1,John,john@test.com";
 			const result = CsvReader.parse(csv, { excludeColumns: ["nonexistent"] });
 
@@ -112,10 +115,10 @@ describe("Column Selection/Exclusion", () => {
 	describe("identifierColumn", () => {
 		it("should use specified identifier column for grouping continuation rows", () => {
 			const records = [
-				{ productId: "P001", name: "Widget", variant: "Small", price: "10.00" },
-				{ productId: "", name: "", variant: "Medium", price: "15.00" },
-				{ productId: "", name: "", variant: "Large", price: "20.00" },
-				{ productId: "P002", name: "Gadget", variant: "Standard", price: "25.00" },
+				{ productId: "P001", name: "Widget", "variant[]": "Small", "price[]": "10.00" },
+				{ productId: "", name: "", "variant[]": "Medium", "price[]": "15.00" },
+				{ productId: "", name: "", "variant[]": "Large", "price[]": "20.00" },
+				{ productId: "P002", name: "Gadget", "variant[]": "Standard", "price[]": "25.00" },
 			];
 
 			const result = NestedJsonConverter.convert(records, {
@@ -129,9 +132,9 @@ describe("Column Selection/Exclusion", () => {
 
 		it("should use identifierColumn that is not the first column", () => {
 			const records = [
-				{ category: "Electronics", productId: "P001", name: "Phone", price: "500" },
-				{ category: "", productId: "", name: "Charger", price: "20" },
-				{ category: "Clothing", productId: "P002", name: "Shirt", price: "30" },
+				{ category: "Electronics", productId: "P001", "name[]": "Phone", "price[]": "500" },
+				{ category: "", productId: "", "name[]": "Charger", "price[]": "20" },
+				{ category: "Clothing", productId: "P002", "name[]": "Shirt", "price[]": "30" },
 			];
 
 			const result = NestedJsonConverter.convert(records, {
@@ -147,16 +150,16 @@ describe("Column Selection/Exclusion", () => {
 
 		it("should default to first column if identifierColumn not specified", () => {
 			const records = [
-				{ id: "1", name: "A", value: "100" },
-				{ id: "", name: "B", value: "200" },
-				{ id: "2", name: "C", value: "300" },
+				{ id: "1", "name[]": "A", "value[]": "100" },
+				{ id: "", "name[]": "B", "value[]": "200" },
+				{ id: "2", "name[]": "C", "value[]": "300" },
 			];
 
 			const result = NestedJsonConverter.convert(records, {});
 
 			expect(result.length).toBe(2);
-			expect(result[0].id).toBe("1");
-			expect(result[1].id).toBe("2");
+			expect(result[0].id).toBe(1);
+			expect(result[1].id).toBe(2);
 		});
 
 		it("should throw when identifierColumn is missing", () => {
@@ -211,7 +214,7 @@ describe("Column Selection/Exclusion", () => {
 				results.push(record as NestedObject);
 			}
 
-			expect(results[0]).toEqual({ id: "1", name: "John" });
+			expect(results[0]).toEqual({ id: 1, name: "John" });
 		});
 
 		it("should support excludeColumns in streaming parser", async () => {
@@ -226,11 +229,11 @@ describe("Column Selection/Exclusion", () => {
 				results.push(record as NestedObject);
 			}
 
-			expect(results[0]).toEqual({ id: "1", name: "John" });
+			expect(results[0]).toEqual({ id: 1, name: "John" });
 		});
 
 		it("should warn for missing includeColumns in streaming parser", async () => {
-			const warnSpy = jest.spyOn(console, "warn").mockImplementation();
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			const csv = "id,name,email\n1,John,john@test.com\n";
 			const stream = Readable.from([csv]);
 			const parser = new CsvStreamParser({
@@ -260,36 +263,6 @@ describe("Column Selection/Exclusion", () => {
 		});
 	});
 
-	describe("column selection with headerTransformer", () => {
-		it("should filter based on original header names, not transformed names", () => {
-			const csv = "User ID,User Name,Email\n1,John,john@test.com";
-			const result = CsvReader.parse(csv, {
-				headerTransformer: (h: string) => h.toLowerCase().replace(" ", "_"),
-				includeColumns: ["User ID", "User Name"],
-			});
-
-			expect(result[0]).toEqual({ user_id: "1", user_name: "John" });
-		});
-
-		it("should require transformed identifierColumn name in streaming parser", async () => {
-			const csv = "User ID,values[]\n1,a\n,b";
-
-			await expect(
-				CsvStreamParser.parseStream(Readable.from([csv]), {
-					headerTransformer: (h: string) => h.toLowerCase().replace(" ", "_"),
-					identifierColumn: "User ID",
-				})
-			).rejects.toThrow("identifierColumn 'User ID' not found in headers");
-
-			const result = await CsvStreamParser.parseStream(Readable.from([csv]), {
-				headerTransformer: (h: string) => h.toLowerCase().replace(" ", "_"),
-				identifierColumn: "user_id",
-			});
-
-			expect(result).toEqual([{ user_id: "1", values: ["a", "b"] }]);
-		});
-	});
-
 	describe("column selection with columnMapping", () => {
 		it("should filter based on original headers when columnMapping is applied", () => {
 			const csv = "id,firstName,lastName\n1,John,Doe";
@@ -316,7 +289,7 @@ describe("Column Selection/Exclusion", () => {
 				identifierColumn: "recordId",
 			});
 
-			expect(result).toEqual([{ recordId: "1", values: ["a", "b"] }]);
+			expect(result).toEqual([{ recordId: 1, values: ["a", "b"] }]);
 		});
 	});
 
@@ -343,9 +316,9 @@ describe("Column Selection/Exclusion", () => {
 
 		it("should handle excluding first column with identifierColumn", () => {
 			const records = [
-				{ extra: "X", id: "P001", name: "Widget", variant: "Small" },
-				{ extra: "X", id: "", name: "Widget", variant: "Medium" },
-				{ extra: "Y", id: "P002", name: "Gadget", variant: "Standard" },
+				{ extra: "X", id: "P001", name: "Widget", "variant[]": "Small" },
+				{ extra: "", id: "", name: "", "variant[]": "Medium" },
+				{ extra: "Y", id: "P002", name: "Gadget", "variant[]": "Standard" },
 			];
 
 			const result = NestedJsonConverter.convert(records, {

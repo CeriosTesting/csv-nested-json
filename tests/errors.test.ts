@@ -1,3 +1,5 @@
+import { describe, expect, it } from "vitest";
+
 import { CsvEncodingError, CsvFileNotFoundError, CsvParseError, CsvValidationError } from "../src/errors";
 
 describe("CsvParseError", () => {
@@ -353,7 +355,7 @@ describe("Error handling patterns", () => {
 			if (error instanceof CsvFileNotFoundError) {
 				expect(error.filePath).toBe("/nonexistent.csv");
 			} else {
-				fail("Should have caught CsvFileNotFoundError");
+				expect.fail("Should have caught CsvFileNotFoundError");
 			}
 		}
 	});

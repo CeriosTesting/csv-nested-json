@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
 import { CsvParser } from "../src/csv-parser";
+
 import { TestFolderHelper } from "./test-folder-helper";
 
 const testFolderHelper = new TestFolderHelper("csv-parser-integration-tests");
@@ -21,8 +25,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = CsvParser.parseFileSync(csvPath);
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", address: { city: "NYC" } },
-				{ id: "2", name: "Bob", address: { city: "LA" } },
+				{ id: 1, name: "Alice", address: { city: "NYC" } },
+				{ id: 2, name: "Bob", address: { city: "LA" } },
 			]);
 		});
 
@@ -42,8 +46,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = CsvParser.parseFileSync(csvPath, { delimiter: ";" });
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 	});
@@ -59,8 +63,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = await CsvParser.parseFile(csvPath);
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", address: { city: "NYC" } },
-				{ id: "2", name: "Bob", address: { city: "LA" } },
+				{ id: 1, name: "Alice", address: { city: "NYC" } },
+				{ id: 2, name: "Bob", address: { city: "LA" } },
 			]);
 		});
 
@@ -80,8 +84,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = await CsvParser.parseFile(csvPath, { delimiter: ";" });
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 	});
@@ -95,8 +99,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = CsvParser.parseString(csvContent);
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", address: { city: "NYC" } },
-				{ id: "2", name: "Bob", address: { city: "LA" } },
+				{ id: 1, name: "Alice", address: { city: "NYC" } },
+				{ id: 2, name: "Bob", address: { city: "LA" } },
 			]);
 		});
 
@@ -113,13 +117,13 @@ describe("CsvParser - Integration Tests", () => {
 			const result = CsvParser.parseString(csvContent, { delimiter: ";" });
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 
 		it("should handle arrays in continuation rows", () => {
-			const csvContent = `id,name,skills
+			const csvContent = `id,name,skills[]
 1,Alice,JavaScript
 ,,TypeScript
 ,,React`;
@@ -128,7 +132,7 @@ describe("CsvParser - Integration Tests", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					name: "Alice",
 					skills: ["JavaScript", "TypeScript", "React"],
 				},
@@ -148,8 +152,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = await CsvParser.parseStream(stream);
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", address: { city: "NYC" } },
-				{ id: "2", name: "Bob", address: { city: "LA" } },
+				{ id: 1, name: "Alice", address: { city: "NYC" } },
+				{ id: 2, name: "Bob", address: { city: "LA" } },
 			]);
 		});
 
@@ -162,8 +166,8 @@ describe("CsvParser - Integration Tests", () => {
 			const result = await CsvParser.parseStream(stream);
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", address: { city: "NYC" } },
-				{ id: "2", name: "Bob", address: { city: "LA" } },
+				{ id: 1, name: "Alice", address: { city: "NYC" } },
+				{ id: 2, name: "Bob", address: { city: "LA" } },
 			]);
 		});
 
@@ -181,15 +185,15 @@ describe("CsvParser - Integration Tests", () => {
 			const result = await CsvParser.parseStream(stream, { delimiter: ";" });
 
 			expect(result).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 	});
 
 	describe("End-to-end complex scenarios", () => {
 		it("should handle realistic user data with all features", () => {
-			const csvContent = `id,username,email,profile.firstName,profile.lastName,addresses.type,addresses.street,addresses.city
+			const csvContent = `id,username,email,profile.firstName,profile.lastName,addresses[].type,addresses[].street,addresses[].city
 1,johndoe,john@example.com,John,Doe,home,123 Main St,NYC
 ,,,,,work,456 Office Blvd,NYC
 2,janedoe,jane@example.com,Jane,Doe,home,789 Park Ave,Boston`;
@@ -198,7 +202,7 @@ describe("CsvParser - Integration Tests", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					username: "johndoe",
 					email: "john@example.com",
 					profile: {
@@ -211,7 +215,7 @@ describe("CsvParser - Integration Tests", () => {
 					],
 				},
 				{
-					id: "2",
+					id: 2,
 					username: "janedoe",
 					email: "jane@example.com",
 					profile: {
@@ -231,13 +235,13 @@ describe("CsvParser - Integration Tests", () => {
 			const result = CsvParser.parseString(csvContent, { delimiter: ";" });
 
 			expect(result).toEqual([
-				{ id: "1", name: "Product A", price: "19,99", description: "A great product, very useful" },
-				{ id: "2", name: "Product B", price: "29,99", description: "Another product, even better" },
+				{ id: 1, name: "Product A", price: "19,99", description: "A great product, very useful" },
+				{ id: 2, name: "Product B", price: "29,99", description: "Another product, even better" },
 			]);
 		});
 
 		it("should handle mixed nesting and arrays", () => {
-			const csvContent = `id,company,projects.name,projects.team.lead,projects.team.size
+			const csvContent = `id,company,projects[].name,projects[].team.lead,projects[].team.size
 1,TechCorp,Website,Alice,5
 ,,Mobile App,Bob,8
 2,DesignCo,Dashboard,Charlie,3`;
@@ -246,17 +250,17 @@ describe("CsvParser - Integration Tests", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					company: "TechCorp",
 					projects: [
-						{ name: "Website", team: { lead: "Alice", size: "5" } },
-						{ name: "Mobile App", team: { lead: "Bob", size: "8" } },
+						{ name: "Website", team: { lead: "Alice", size: 5 } },
+						{ name: "Mobile App", team: { lead: "Bob", size: 8 } },
 					],
 				},
 				{
-					id: "2",
+					id: 2,
 					company: "DesignCo",
-					projects: [{ name: "Dashboard", team: { lead: "Charlie", size: "3" } }],
+					projects: [{ name: "Dashboard", team: { lead: "Charlie", size: 3 } }],
 				},
 			]);
 		});

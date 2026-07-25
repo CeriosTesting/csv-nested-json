@@ -1,77 +1,10 @@
 import { Readable } from "node:stream";
-import type { HeaderTransformer, RowFilter } from "../src";
+
+import { describe, expect, it } from "vitest";
+
 import { CsvParser, CsvStreamParser } from "../src";
 
 describe("Parser Options - New Features", () => {
-	// =============================================================================
-	// Header Transformer Tests
-	// =============================================================================
-	describe("headerTransformer", () => {
-		it("should transform headers to lowercase", () => {
-			const csv = "ID,NAME,EMAIL\n1,John,john@example.com";
-			const transformer: HeaderTransformer = h => h.toLowerCase();
-
-			const result = CsvParser.parseString(csv, { headerTransformer: transformer });
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("id", "1");
-			expect(result[0]).toHaveProperty("name", "John");
-			expect(result[0]).toHaveProperty("email", "john@example.com");
-		});
-
-		it("should transform headers to camelCase", () => {
-			const csv = "first_name,last_name,email_address\nJohn,Doe,john@example.com";
-			const transformer: HeaderTransformer = h => h.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-
-			const result = CsvParser.parseString(csv, { headerTransformer: transformer });
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("firstName", "John");
-			expect(result[0]).toHaveProperty("lastName", "Doe");
-			expect(result[0]).toHaveProperty("emailAddress", "john@example.com");
-		});
-
-		it("should trim whitespace from headers", () => {
-			const csv = " id , name , email \n1,John,john@example.com";
-			const transformer: HeaderTransformer = h => h.trim();
-
-			const result = CsvParser.parseString(csv, { headerTransformer: transformer });
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("id", "1");
-			expect(result[0]).toHaveProperty("name", "John");
-			expect(result[0]).toHaveProperty("email", "john@example.com");
-		});
-
-		it("should work with nested paths", () => {
-			const csv = "ID,Person.Name,Person.Age\n1,John,30";
-			const transformer: HeaderTransformer = h => h.toLowerCase();
-
-			const result = CsvParser.parseString(csv, { headerTransformer: transformer });
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("id", "1");
-			expect(result[0]).toHaveProperty("person");
-			expect((result[0] as { person: { name: string; age: string } }).person).toHaveProperty("name", "John");
-			expect((result[0] as { person: { name: string; age: string } }).person).toHaveProperty("age", "30");
-		});
-
-		it("should apply before column mapping", () => {
-			const csv = "First Name,Last Name\nJohn,Doe";
-			const transformer: HeaderTransformer = h => h.toLowerCase().replace(/ /g, "_");
-			const mapping = { first_name: "firstName", last_name: "lastName" };
-
-			const result = CsvParser.parseString(csv, {
-				headerTransformer: transformer,
-				columnMapping: mapping,
-			});
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("firstName", "John");
-			expect(result[0]).toHaveProperty("lastName", "Doe");
-		});
-	});
-
 	// =============================================================================
 	// Column Mapping Tests
 	// =============================================================================
@@ -94,7 +27,8 @@ describe("Parser Options - New Features", () => {
 			const result = CsvParser.parseString(csv, { columnMapping: mapping });
 
 			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("id", "1");
+			// `id` is coerced to a number by the default-on auto-parse.
+			expect(result[0]).toHaveProperty("id", 1);
 			expect(result[0]).toHaveProperty("first_name", "John");
 			expect(result[0]).toHaveProperty("LastName", "Doe");
 		});
@@ -114,198 +48,42 @@ describe("Parser Options - New Features", () => {
 	});
 
 	// =============================================================================
-	// Row Filter Tests
+	// Date Handling Tests
 	// =============================================================================
-	describe("rowFilter", () => {
-		it("should filter rows based on value", () => {
-			const csv = "id,status\n1,active\n2,deleted\n3,active\n4,deleted";
-			const filter: RowFilter = record => record.status === "active";
-
-			const result = CsvParser.parseString(csv, { rowFilter: filter });
-
-			expect(result).toHaveLength(2);
-			expect(result[0]).toHaveProperty("id", "1");
-			expect(result[1]).toHaveProperty("id", "3");
-		});
-
-		it("should provide row index to filter function", () => {
-			const csv = "id,name\n1,First\n2,Second\n3,Third\n4,Fourth";
-			const rowIndices: number[] = [];
-			const filter: RowFilter = (_record, index) => {
-				rowIndices.push(index);
-				return index % 2 === 0; // Keep even indices (0, 2)
-			};
-
-			const result = CsvParser.parseString(csv, { rowFilter: filter });
-
-			expect(rowIndices).toEqual([0, 1, 2, 3]);
-			expect(result).toHaveLength(2);
-			expect(result[0]).toHaveProperty("name", "First");
-			expect(result[1]).toHaveProperty("name", "Third");
-		});
-
-		it("should filter out all rows when filter returns false", () => {
-			const csv = "id,name\n1,John\n2,Jane";
-			const filter: RowFilter = () => false;
-
-			const result = CsvParser.parseString(csv, { rowFilter: filter });
-
-			expect(result).toHaveLength(0);
-		});
-
-		it("should keep all rows when filter returns true", () => {
-			const csv = "id,name\n1,John\n2,Jane";
-			const filter: RowFilter = () => true;
-
-			const result = CsvParser.parseString(csv, { rowFilter: filter });
-
-			expect(result).toHaveLength(2);
-		});
-
-		it("should filter with multiple conditions", () => {
-			const csv = "id,age,status\n1,25,active\n2,17,active\n3,30,deleted\n4,22,active";
-			const filter: RowFilter = record => parseInt(record.age, 10) >= 18 && record.status === "active";
-
-			const result = CsvParser.parseString(csv, { rowFilter: filter });
-
-			expect(result).toHaveLength(2);
-			expect(result[0]).toHaveProperty("id", "1");
-			expect(result[1]).toHaveProperty("id", "4");
-		});
-	});
-
-	// =============================================================================
-	// Default Values Tests
-	// =============================================================================
-	describe("defaultValues", () => {
-		it("should apply default value to empty cells", () => {
-			const csv = "id,status\n1,active\n2,\n3,inactive";
-
-			const result = CsvParser.parseString(csv, {
-				defaultValues: { status: "pending" },
-			});
-
-			expect(result).toHaveLength(3);
-			expect(result[0]).toHaveProperty("status", "active");
-			expect(result[1]).toHaveProperty("status", "pending");
-			expect(result[2]).toHaveProperty("status", "inactive");
-		});
-
-		it("should apply multiple default values", () => {
-			const csv = "id,status,count\n1,,\n2,active,";
-
-			const result = CsvParser.parseString(csv, {
-				defaultValues: { status: "pending", count: "0" },
-			});
-
-			expect(result).toHaveLength(2);
-			expect(result[0]).toHaveProperty("status", "pending");
-			expect(result[0]).toHaveProperty("count", "0");
-			expect(result[1]).toHaveProperty("status", "active");
-			expect(result[1]).toHaveProperty("count", "0");
-		});
-
-		it("should work with auto-parse numbers", () => {
-			const csv = "id,count\n1,\n2,5";
-
-			const result = CsvParser.parseString(csv, {
-				defaultValues: { count: "0" },
-				autoParseNumbers: true,
-			});
-
-			expect(result).toHaveLength(2);
-			expect(result[0]).toHaveProperty("count", 0);
-			expect(result[1]).toHaveProperty("count", 5);
-		});
-
-		it("should use column names after transformation", () => {
-			const csv = "ID,STATUS\n1,";
-			const transformer: HeaderTransformer = h => h.toLowerCase();
-
-			const result = CsvParser.parseString(csv, {
-				headerTransformer: transformer,
-				defaultValues: { status: "pending" },
-			});
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("status", "pending");
-		});
-	});
-
-	// =============================================================================
-	// Date Parsing Tests
-	// =============================================================================
-	describe("autoParseDates", () => {
-		it("should parse ISO date strings", () => {
+	// There is no built-in date option: Date.parse recognition is too loose/locale-dependent, so
+	// date-looking strings stay strings.
+	describe("date handling", () => {
+		it("leaves ISO date strings as plain strings by default", () => {
 			const csv = "id,created\n1,2024-01-15";
 
-			const result = CsvParser.parseString(csv, { autoParseDates: true });
+			const result = CsvParser.parseString(csv);
 
 			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("created");
-			const created = (result[0] as { created: Date }).created;
-			expect(created).toBeInstanceOf(Date);
-			expect(created.getFullYear()).toBe(2024);
-			expect(created.getMonth()).toBe(0); // January
-			expect(created.getDate()).toBe(15);
+			expect(result[0]).toHaveProperty("created", "2024-01-15");
+		});
+	});
+
+	// =============================================================================
+	// Auto-parse defaults
+	// =============================================================================
+	describe("auto-parse defaults", () => {
+		it("coerces numbers and booleans by default", () => {
+			const csv = "id,active,score\n1,true,9.5";
+
+			const result = CsvParser.parseString(csv);
+
+			expect(result).toEqual([{ id: 1, active: true, score: 9.5 }]);
 		});
 
-		it("should parse ISO datetime strings", () => {
-			const csv = "id,timestamp\n1,2024-01-15T10:30:00Z";
-
-			const result = CsvParser.parseString(csv, { autoParseDates: true });
-
-			expect(result).toHaveLength(1);
-			const timestamp = (result[0] as { timestamp: Date }).timestamp;
-			expect(timestamp).toBeInstanceOf(Date);
-			expect(timestamp.getFullYear()).toBe(2024);
-		});
-
-		it("should not parse pure numbers as dates", () => {
-			const csv = "id,value\n1,12345";
+		it("can be disabled explicitly to keep raw strings", () => {
+			const csv = "id,active,score\n1,true,9.5";
 
 			const result = CsvParser.parseString(csv, {
-				autoParseDates: true,
 				autoParseNumbers: false,
+				autoParseBooleans: false,
 			});
 
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("value", "12345");
-		});
-
-		it("should leave non-date strings unchanged", () => {
-			const csv = "id,name\n1,John Doe";
-
-			const result = CsvParser.parseString(csv, { autoParseDates: true });
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("name", "John Doe");
-		});
-
-		it("should work with autoParseNumbers", () => {
-			const csv = "id,created,count\n1,2024-01-15,42";
-
-			const result = CsvParser.parseString(csv, {
-				autoParseDates: true,
-				autoParseNumbers: true,
-			});
-
-			expect(result).toHaveLength(1);
-			expect((result[0] as { created: Date }).created).toBeInstanceOf(Date);
-			expect(result[0]).toHaveProperty("count", 42);
-		});
-
-		it("should not parse numbers when autoParseNumbers is also enabled", () => {
-			const csv = "id,value\n1,42";
-
-			const result = CsvParser.parseString(csv, {
-				autoParseDates: true,
-				autoParseNumbers: true,
-			});
-
-			expect(result).toHaveLength(1);
-			expect(result[0]).toHaveProperty("value", 42);
-			expect(typeof (result[0] as { value: number }).value).toBe("number");
+			expect(result).toEqual([{ id: "1", active: "true", score: "9.5" }]);
 		});
 	});
 
@@ -427,18 +205,6 @@ describe("Parser Options - New Features", () => {
 			});
 		};
 
-		it("should apply headerTransformer", async () => {
-			const parser = new CsvStreamParser({
-				headerTransformer: h => h.toLowerCase(),
-			});
-
-			const results = await collectStream(parser, "ID,NAME\n1,John");
-
-			expect(results).toHaveLength(1);
-			expect(results[0]).toHaveProperty("id", "1");
-			expect(results[0]).toHaveProperty("name", "John");
-		});
-
 		it("should apply columnMapping", async () => {
 			const parser = new CsvStreamParser({
 				columnMapping: { FirstName: "first_name" },
@@ -450,37 +216,13 @@ describe("Parser Options - New Features", () => {
 			expect(results[0]).toHaveProperty("first_name", "John");
 		});
 
-		it("should apply rowFilter", async () => {
-			const parser = new CsvStreamParser({
-				rowFilter: record => record.status === "active",
-			});
-
-			const results = await collectStream(parser, "id,status\n1,active\n2,deleted\n3,active");
-
-			expect(results).toHaveLength(2);
-		});
-
-		it("should apply defaultValues", async () => {
-			const parser = new CsvStreamParser({
-				defaultValues: { status: "pending" },
-			});
-
-			const results = await collectStream(parser, "id,status\n1,\n2,active");
-
-			expect(results).toHaveLength(2);
-			expect(results[0]).toHaveProperty("status", "pending");
-			expect(results[1]).toHaveProperty("status", "active");
-		});
-
-		it("should parse dates", async () => {
-			const parser = new CsvStreamParser({
-				autoParseDates: true,
-			});
+		it("leaves date-looking strings as strings", async () => {
+			const parser = new CsvStreamParser();
 
 			const results = await collectStream(parser, "id,created\n1,2024-01-15");
 
 			expect(results).toHaveLength(1);
-			expect((results[0] as { created: Date }).created).toBeInstanceOf(Date);
+			expect(results[0]).toHaveProperty("created", "2024-01-15");
 		});
 
 		it("should handle null values", async () => {
@@ -503,7 +245,7 @@ describe("Parser Options - New Features", () => {
 
 			const result = CsvParser.parseString(csv);
 
-			expect(result).toEqual([{ id: "1", emptyQuoted: "" }]);
+			expect(result).toEqual([{ id: 1, emptyQuoted: "" }]);
 		});
 
 		it("should preserve only unquoted empty columns", () => {
@@ -514,7 +256,7 @@ describe("Parser Options - New Features", () => {
 				preserveEmptyString: false,
 			});
 
-			expect(result).toEqual([{ id: "1", emptyColumn: "" }]);
+			expect(result).toEqual([{ id: 1, emptyColumn: "" }]);
 		});
 
 		it("should preserve only quoted empty strings", () => {
@@ -524,7 +266,7 @@ describe("Parser Options - New Features", () => {
 				preserveEmptyString: true,
 			});
 
-			expect(result).toEqual([{ id: "1", emptyQuoted: "" }]);
+			expect(result).toEqual([{ id: 1, emptyQuoted: "" }]);
 		});
 
 		it("should preserve both kinds of empty values when both options are enabled", () => {
@@ -535,28 +277,7 @@ describe("Parser Options - New Features", () => {
 				preserveEmptyString: true,
 			});
 
-			expect(result).toEqual([{ id: "1", emptyColumn: "", emptyQuoted: "" }]);
-		});
-
-		it("should keep defaultValues precedence over preserve options", () => {
-			const csv = 'id,emptyColumn,emptyQuoted\n1,,""';
-
-			const result = CsvParser.parseString(csv, {
-				defaultValues: {
-					emptyColumn: "fallback-column",
-					emptyQuoted: "fallback-quoted",
-				},
-				preserveEmptyColumnAsEmptyString: true,
-				preserveEmptyString: true,
-			});
-
-			expect(result).toEqual([
-				{
-					id: "1",
-					emptyColumn: "fallback-column",
-					emptyQuoted: "fallback-quoted",
-				},
-			]);
+			expect(result).toEqual([{ id: 1, emptyColumn: "", emptyQuoted: "" }]);
 		});
 
 		it("should apply null handling before preserve options", () => {
@@ -571,7 +292,7 @@ describe("Parser Options - New Features", () => {
 
 			expect(result).toEqual([
 				{
-					id: "1",
+					id: 1,
 					emptyColumn: null,
 					emptyQuoted: null,
 				},
@@ -586,8 +307,8 @@ describe("Parser Options - New Features", () => {
 			});
 
 			expect(result).toEqual([
-				{ id: "1", tags: ["a", "b"] },
-				{ id: "2", tags: ["c"] },
+				{ id: 1, tags: ["a", "b"] },
+				{ id: 2, tags: ["c"] },
 			]);
 		});
 
@@ -600,8 +321,8 @@ describe("Parser Options - New Features", () => {
 			});
 
 			expect(result).toEqual([
-				{ id: "1", emptyQuoted: "" },
-				{ id: "2", emptyQuoted: "value" },
+				{ id: 1, emptyQuoted: "" },
+				{ id: 2, emptyQuoted: "value" },
 			]);
 		});
 
@@ -620,19 +341,16 @@ describe("Parser Options - New Features", () => {
 	});
 
 	// =============================================================================
-	// Combined Features Tests
+	// Combined Features Tests (retained options only)
 	// =============================================================================
 	describe("Combined Features", () => {
-		it("should apply all transformations in correct order", () => {
-			const csv = "FIRST_NAME,LAST_NAME,STATUS,SCORE,CREATED\nJohn,Doe,null,95,2024-01-15";
+		it("should apply column mapping, null handling, and auto-parse together", () => {
+			const csv = "firstName,lastName,status,score\nJohn,Doe,null,95";
 
 			const result = CsvParser.parseString(csv, {
-				headerTransformer: h => h.toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase()),
 				columnMapping: { firstName: "name.first", lastName: "name.last" },
 				nullValues: ["null"],
 				nullRepresentation: "null",
-				autoParseNumbers: true,
-				autoParseDates: true,
 			});
 
 			expect(result).toHaveLength(1);
@@ -640,27 +358,11 @@ describe("Parser Options - New Features", () => {
 				name: { first: string; last: string };
 				status: null;
 				score: number;
-				created: Date;
 			};
 			expect(record.name.first).toBe("John");
 			expect(record.name.last).toBe("Doe");
 			expect(record.status).toBeNull();
 			expect(record.score).toBe(95);
-			expect(record.created).toBeInstanceOf(Date);
-		});
-
-		it("should work with default values and filtering", () => {
-			const csv = "id,status\n1,\n2,deleted\n3,\n4,active";
-
-			const result = CsvParser.parseString(csv, {
-				defaultValues: { status: "pending" },
-				rowFilter: record => record.status !== "deleted",
-			});
-
-			expect(result).toHaveLength(3);
-			expect(result[0]).toHaveProperty("status", "pending");
-			expect(result[1]).toHaveProperty("status", "pending");
-			expect(result[2]).toHaveProperty("status", "active");
 		});
 	});
 });

@@ -1,4 +1,7 @@
 import { Readable } from "node:stream";
+
+import { describe, expect, it } from "vitest";
+
 import { CsvStreamParser } from "../src/csv-stream-parser";
 import type { NestedObject, ProgressInfo } from "../src/types";
 
@@ -17,8 +20,8 @@ describe("CsvStreamParser", () => {
 			}
 
 			expect(records).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 
@@ -58,7 +61,7 @@ describe("CsvStreamParser", () => {
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", person: { name: "Alice", age: "25" } }]);
+			expect(records).toEqual([{ id: 1, person: { name: "Alice", age: 25 } }]);
 		});
 
 		it("should handle deeply nested objects", async () => {
@@ -74,7 +77,7 @@ describe("CsvStreamParser", () => {
 
 			expect(records).toEqual([
 				{
-					id: "1",
+					id: 1,
 					level1: {
 						level2: {
 							level3: {
@@ -101,8 +104,8 @@ describe("CsvStreamParser", () => {
 			}
 
 			expect(records).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
 			]);
 		});
 	});
@@ -119,8 +122,8 @@ describe("CsvStreamParser", () => {
 			}
 
 			expect(records).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 
@@ -134,7 +137,7 @@ describe("CsvStreamParser", () => {
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", description: "Hello, World" }]);
+			expect(records).toEqual([{ id: 1, description: "Hello, World" }]);
 		});
 
 		it("should handle newlines inside quoted fields split across chunks", async () => {
@@ -147,7 +150,7 @@ describe("CsvStreamParser", () => {
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", bio: "Line 1\nLine 2" }]);
+			expect(records).toEqual([{ id: 1, bio: "Line 1\nLine 2" }]);
 		});
 
 		it("should handle many small chunks", async () => {
@@ -161,7 +164,7 @@ describe("CsvStreamParser", () => {
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", name: "Alice" }]);
+			expect(records).toEqual([{ id: 1, name: "Alice" }]);
 		});
 	});
 
@@ -177,7 +180,7 @@ describe("CsvStreamParser", () => {
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", name: "Alice", age: "25" }]);
+			expect(records).toEqual([{ id: 1, name: "Alice", age: 25 }]);
 		});
 
 		it("should use custom quote character", async () => {
@@ -191,7 +194,7 @@ describe("CsvStreamParser", () => {
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", name: "Alice", description: "Hello, World" }]);
+			expect(records).toEqual([{ id: 1, name: "Alice", description: "Hello, World" }]);
 		});
 
 		it("should skip rows when skipRows is specified", async () => {
@@ -207,7 +210,7 @@ id,name,age
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", name: "Alice", age: "25" }]);
+			expect(records).toEqual([{ id: 1, name: "Alice", age: 25 }]);
 		});
 
 		it("should parse nested records with dot notation in options flow", async () => {
@@ -221,7 +224,7 @@ id,name,age
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", person: { name: "Alice", age: "25" } }]);
+			expect(records).toEqual([{ id: 1, person: { name: "Alice", age: 25 } }]);
 		});
 
 		it("should auto-parse numbers when enabled", async () => {
@@ -281,7 +284,7 @@ id,name,age
 			}
 
 			expect(typeof records[0].big).toBe("number");
-			expect(String(records[0].big)).toBe("9007199254740992");
+			expect(String(records[0].big as number)).toBe("9007199254740992");
 		});
 
 		it("should auto-parse booleans when enabled", async () => {
@@ -295,50 +298,7 @@ id,name,age
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", active: true, verified: false }]);
-		});
-
-		it("should apply custom value transformer", async () => {
-			const csvContent = `id,name
-1,alice`;
-			const stream = Readable.from([csvContent]);
-			const parser = new CsvStreamParser({
-				valueTransformer: (value, header) => {
-					if (header === "name" && typeof value === "string") {
-						return value.toUpperCase();
-					}
-					return value;
-				},
-			});
-
-			const records: NestedObject[] = [];
-			for await (const record of stream.pipe(parser)) {
-				records.push(record as NestedObject);
-			}
-
-			expect(records).toEqual([{ id: "1", name: "ALICE" }]);
-		});
-
-		it("should apply transformations in correct order", async () => {
-			const csvContent = `id,value
-1,42`;
-			const stream = Readable.from([csvContent]);
-			const parser = new CsvStreamParser({
-				autoParseNumbers: true,
-				valueTransformer: value => {
-					if (typeof value === "number") {
-						return value * 2;
-					}
-					return value;
-				},
-			});
-
-			const records: NestedObject[] = [];
-			for await (const record of stream.pipe(parser)) {
-				records.push(record as NestedObject);
-			}
-
-			expect(records).toEqual([{ id: 2, value: 84 }]);
+			expect(records).toEqual([{ id: 1, active: true, verified: false }]);
 		});
 
 		it("should combine autoParseNumbers and autoParseBooleans", async () => {
@@ -371,7 +331,7 @@ id,name,age
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", name: "Alice" }]);
+			expect(records).toEqual([{ id: 1, name: "Alice" }]);
 		});
 
 		it("should not strip BOM when stripBom is false", async () => {
@@ -416,8 +376,8 @@ id,name,age
 			}
 
 			expect(records).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
 			]);
 		});
 
@@ -432,8 +392,8 @@ id,name,age
 			}
 
 			expect(records).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
 			]);
 		});
 
@@ -463,7 +423,7 @@ id,name,age
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", description: "Hello, World" }]);
+			expect(records).toEqual([{ id: 1, description: "Hello, World" }]);
 		});
 
 		it("should handle escaped quotes", async () => {
@@ -477,7 +437,7 @@ id,name,age
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", quote: 'He said "Hello"' }]);
+			expect(records).toEqual([{ id: 1, quote: 'He said "Hello"' }]);
 		});
 
 		it("should handle quoted fields with newlines", async () => {
@@ -492,7 +452,7 @@ Line 2"`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", bio: "Line 1\nLine 2" }]);
+			expect(records).toEqual([{ id: 1, bio: "Line 1\nLine 2" }]);
 		});
 
 		it("should handle empty quoted fields", async () => {
@@ -507,7 +467,7 @@ Line 2"`;
 			}
 
 			// Explicit quoted empties are preserved by default
-			expect(records).toEqual([{ id: "1", value: "" }]);
+			expect(records).toEqual([{ id: 1, value: "" }]);
 		});
 	});
 
@@ -523,7 +483,7 @@ Line 2"`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", tags: ["javascript"] }]);
+			expect(records).toEqual([{ id: 1, tags: ["javascript"] }]);
 		});
 
 		it("should use custom array suffix indicator", async () => {
@@ -537,7 +497,7 @@ Line 2"`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", tags: ["javascript"] }]);
+			expect(records).toEqual([{ id: 1, tags: ["javascript"] }]);
 		});
 
 		it("should handle nested paths with array suffix", async () => {
@@ -551,7 +511,7 @@ Line 2"`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", person: { skills: ["typescript"] } }]);
+			expect(records).toEqual([{ id: 1, person: { skills: ["typescript"] } }]);
 		});
 	});
 
@@ -572,7 +532,7 @@ Line 2"`;
 
 			expect(records).toEqual([
 				{
-					id: "1",
+					id: 1,
 					items: [
 						{ name: "item1", tags: ["tag1", "tag2", "tag3"] },
 						{ name: "item2", tags: ["tag4"] },
@@ -598,8 +558,8 @@ Line 2"`;
 
 			expect(batches).toEqual([
 				[
-					{ id: "1", items: [{ name: "item1", tags: ["tag1", "tag2"] }] },
-					{ id: "2", items: [{ name: "item2", tags: ["tag3", "tag4"] }] },
+					{ id: 1, items: [{ name: "item1", tags: ["tag1", "tag2"] }] },
+					{ id: 2, items: [{ name: "item2", tags: ["tag3", "tag4"] }] },
 				],
 			]);
 		});
@@ -618,8 +578,8 @@ g1,2,c`;
 			}
 
 			expect(records).toEqual([
-				{ group: "g1", id: "1", values: ["a", "b"] },
-				{ group: "g1", id: "2", values: ["c"] },
+				{ group: "g1", id: 1, values: ["a", "b"] },
+				{ group: "g1", id: 2, values: ["c"] },
 			]);
 		});
 
@@ -671,7 +631,7 @@ g1,2,c`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", name: "Alice" }]);
+			expect(records).toEqual([{ id: 1, name: "Alice" }]);
 		});
 
 		it("should preserve only unquoted empty columns when configured", async () => {
@@ -687,7 +647,7 @@ g1,2,c`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", emptyColumn: "" }]);
+			expect(records).toEqual([{ id: 1, emptyColumn: "" }]);
 		});
 
 		it("should preserve only quoted empty strings when configured", async () => {
@@ -702,7 +662,7 @@ g1,2,c`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", emptyQuoted: "" }]);
+			expect(records).toEqual([{ id: 1, emptyQuoted: "" }]);
 		});
 
 		it("should treat quoted-empty identifier values as continuation rows", async () => {
@@ -718,8 +678,8 @@ g1,2,c`;
 			}
 
 			expect(records).toEqual([
-				{ id: "1", tags: ["a", "b"] },
-				{ id: "2", tags: ["c"] },
+				{ id: 1, tags: ["a", "b"] },
+				{ id: 2, tags: ["c"] },
 			]);
 		});
 
@@ -733,7 +693,7 @@ g1,2,c`;
 	});
 
 	describe("Event-based usage", () => {
-		it("should emit data events for each record", done => {
+		it("should emit data events for each record", () => {
 			const csvContent = `id,name
 1,Alice
 2,Bob`;
@@ -742,36 +702,40 @@ g1,2,c`;
 
 			const records: NestedObject[] = [];
 
-			stream
-				.pipe(parser)
-				.on("data", record => {
-					records.push(record);
-				})
-				.on("end", () => {
-					expect(records).toEqual([
-						{ id: "1", name: "Alice" },
-						{ id: "2", name: "Bob" },
-					]);
-					done();
-				})
-				.on("error", done);
+			return new Promise<void>((resolve, reject) => {
+				stream
+					.pipe(parser)
+					.on("data", record => {
+						records.push(record);
+					})
+					.on("end", () => {
+						expect(records).toEqual([
+							{ id: 1, name: "Alice" },
+							{ id: 2, name: "Bob" },
+						]);
+						resolve();
+					})
+					.on("error", reject);
+			});
 		});
 
-		it("should emit end event when stream completes", done => {
+		it("should emit end event when stream completes", () => {
 			const csvContent = `id,name
 1,Alice`;
 			const stream = Readable.from([csvContent]);
 			const parser = new CsvStreamParser();
 
-			stream
-				.pipe(parser)
-				.on("data", () => {
-					// Consume data to allow end event
-				})
-				.on("end", () => {
-					done();
-				})
-				.on("error", done);
+			return new Promise<void>((resolve, reject) => {
+				stream
+					.pipe(parser)
+					.on("data", () => {
+						// Consume data to allow end event
+					})
+					.on("end", () => {
+						resolve();
+					})
+					.on("error", reject);
+			});
 		});
 	});
 
@@ -787,7 +751,7 @@ g1,2,c`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", name: "田中太郎" }]);
+			expect(records).toEqual([{ id: 1, name: "田中太郎" }]);
 		});
 
 		it("should handle emoji characters", async () => {
@@ -801,7 +765,7 @@ g1,2,c`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", emoji: "🎉" }]);
+			expect(records).toEqual([{ id: 1, emoji: "🎉" }]);
 		});
 	});
 
@@ -816,7 +780,7 @@ g1,2,c`;
 				records.push(record as NestedObject);
 			}
 
-			expect(records).toEqual([{ id: "1", name: "Alice" }]);
+			expect(records).toEqual([{ id: 1, name: "Alice" }]);
 		});
 	});
 
@@ -830,8 +794,8 @@ g1,2,c`;
 			const records = await CsvStreamParser.parseStream(stream);
 
 			expect(records).toEqual([
-				{ id: "1", name: "Alice", age: "25" },
-				{ id: "2", name: "Bob", age: "30" },
+				{ id: 1, name: "Alice", age: 25 },
+				{ id: 2, name: "Bob", age: 30 },
 			]);
 		});
 
@@ -855,8 +819,8 @@ g1,2,c`;
 			});
 
 			expect(records).toEqual([
-				{ id: "1", name: "Alice", active: true },
-				{ id: "2", name: "Bob", active: false },
+				{ id: 1, name: "Alice", active: true },
+				{ id: 2, name: "Bob", active: false },
 			]);
 		});
 
@@ -886,8 +850,8 @@ g1,2,c`;
 			const records = await CsvStreamParser.parseStream(stream);
 
 			expect(records).toEqual([
-				{ id: "1", tags: ["a", "b"] },
-				{ id: "2", tags: ["c"] },
+				{ id: 1, tags: ["a", "b"] },
+				{ id: 2, tags: ["c"] },
 			]);
 		});
 
@@ -898,12 +862,12 @@ g1,2,c`;
 
 			const records = await CsvStreamParser.parseStream(stream);
 
-			expect(records).toEqual([{ id: "1", person: { name: "Alice", age: "25" } }]);
+			expect(records).toEqual([{ id: 1, person: { name: "Alice", age: 25 } }]);
 		});
 
 		it("should support type parameter for typed results", async () => {
 			interface Person {
-				id: string;
+				id: number;
 				name: string;
 			}
 
@@ -913,7 +877,7 @@ g1,2,c`;
 
 			const records = await CsvStreamParser.parseStream<Person>(stream);
 
-			expect(records[0].id).toBe("1");
+			expect(records[0].id).toBe(1);
 			expect(records[0].name).toBe("Alice");
 		});
 
@@ -938,8 +902,8 @@ g1,2,c`;
 			});
 
 			expect(records).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
 			]);
 		});
 
@@ -951,8 +915,8 @@ g1,2,c`;
 			const records = await CsvStreamParser.parseStream(stream);
 
 			expect(records).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
 			]);
 		});
 	});
@@ -1055,12 +1019,12 @@ g1,2,c`;
 
 			expect(batches.length).toBe(2);
 			expect(batches[0]).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
 			]);
 			expect(batches[1]).toEqual([
-				{ id: "3", name: "Charlie" },
-				{ id: "4", name: "Diana" },
+				{ id: 3, name: "Charlie" },
+				{ id: 4, name: "Diana" },
 			]);
 		});
 
@@ -1080,7 +1044,7 @@ g1,2,c`;
 			expect(batches.length).toBe(2);
 			expect(batches[0].length).toBe(2);
 			expect(batches[1].length).toBe(1); // Partial batch
-			expect(batches[1][0]).toEqual({ id: "3", name: "Charlie" });
+			expect(batches[1][0]).toEqual({ id: 3, name: "Charlie" });
 		});
 
 		it("should flatten batches in parseStream()", async () => {
@@ -1097,9 +1061,9 @@ g1,2,c`;
 
 			expect(records.length).toBe(3);
 			expect(records).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
-				{ id: "3", name: "Charlie" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
+				{ id: 3, name: "Charlie" },
 			]);
 		});
 
@@ -1116,8 +1080,8 @@ g1,2,c`;
 			}
 
 			expect(records).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
 			]);
 		});
 
@@ -1150,13 +1114,13 @@ g1,2,c`;
 
 			expect(records.length).toBe(3);
 			expect(records).toEqual([
-				{ id: "1", name: "Alice" },
-				{ id: "2", name: "Bob" },
-				{ id: "3", name: "Charlie" },
+				{ id: 1, name: "Alice" },
+				{ id: 2, name: "Bob" },
+				{ id: 3, name: "Charlie" },
 			]);
 		});
 
-		it("should apply limit after row filtering", async () => {
+		it("should apply limit to the first N records", async () => {
 			const csvContent = `id,name,active
 1,Alice,true
 2,Bob,false
@@ -1167,13 +1131,12 @@ g1,2,c`;
 
 			const records = await CsvStreamParser.parseStream(stream, {
 				limit: 2,
-				rowFilter: record => record.active === "true",
 			});
 
-			// Should get first 2 records that pass the filter (Alice, Charlie)
+			// Should get the first 2 records (Alice, Bob)
 			expect(records.length).toBe(2);
 			expect(records[0]).toMatchObject({ name: "Alice" });
-			expect(records[1]).toMatchObject({ name: "Charlie" });
+			expect(records[1]).toMatchObject({ name: "Bob" });
 		});
 
 		it("should handle limit greater than available records", async () => {

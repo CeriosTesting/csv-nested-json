@@ -1,6 +1,16 @@
 import { CsvParseError } from "./errors";
-import { type InternalCsvRecord, isQuotedEmptyCell, QUOTED_EMPTY_CELL } from "./internal-empty-cell";
+import { type InternalCsvRecord, isQuotedEmptyCell } from "./internal-empty-cell";
+import {
+	buildUnflattenPlan,
+	needsValueTransformation,
+	resolveNullSet,
+	type TransformedRecord,
+	type TransformedRecordValue,
+	transformRecordValues,
+	unflattenRecord,
+} from "./record-transform";
 import type {
+	CsvErrorSink,
 	CsvParserOptions,
 	CsvRecord,
 	ForcedArrayHierarchy,
@@ -11,8 +21,13 @@ import type {
 } from "./types";
 
 type ConvertibleCsvRecord = CsvRecord | InternalCsvRecord;
-type TransformedRecordValue = string | number | boolean | Date | null | undefined | typeof QUOTED_EMPTY_CELL;
-type TransformedRecord = Record<string, TransformedRecordValue>;
+
+/**
+ * Minimum record count at which precomputing the unflatten path plan is worthwhile. Below this,
+ * building the plan Map costs more than the per-row `String.split` it saves (e.g. the streaming
+ * parser's per-continuation-group convert() calls).
+ */
+const UNFLATTEN_PLAN_MIN_ROWS = 128;
 
 /**
  * Nested JSON conversion utilities.
@@ -21,8 +36,8 @@ type TransformedRecord = Record<string, TransformedRecordValue>;
  * Features:
  * - Dot-notation paths in headers become nested objects
  * - Rows with empty first column are continuation rows (extend previous record)
- * - Automatic array detection when values collide during merge
- * - Forced array fields via `[]` suffix in headers
+ * - Array fields via the `[]` suffix in headers; arrays are never created implicitly.
+ *   A repeated non-`[]` path within a group throws `CsvParseError`.
  * - Value transformation (auto-parse numbers, booleans, custom transformers)
  *
  * @example
@@ -62,7 +77,11 @@ export class NestedJsonConverter {
 	 * // [{ id: 1, active: true, score: 95.5 }]
 	 * ```
 	 */
-	static convert(records: ConvertibleCsvRecord[], options: CsvParserOptions = {}): NestedObject[] {
+	static convert(
+		records: ConvertibleCsvRecord[],
+		options: CsvParserOptions = {},
+		errorSink?: CsvErrorSink
+	): NestedObject[] {
 		if (records.length === 0) return [];
 
 		const arraySuffix = options.arraySuffixIndicator ?? "[]";
@@ -71,25 +90,46 @@ export class NestedJsonConverter {
 		// Detect forced array fields from headers (fields with array suffix indicator)
 		const forcedArrayFields = this.detectForcedArrayFields(records, arraySuffix);
 
+		// Normalize a dot-path header by stripping the array suffix from each segment. Cached so the
+		// mapping is computed once per distinct header and reused across every record.
+		// An empty suffix disables suffix stripping entirely — guard against it before the map, since
+		// `"x".endsWith("")` is always true and `"x".slice(0, -0)` would wrongly yield `""`.
+		const keyCache = new Map<string, string>();
+		const normalizeKey = arraySuffix
+			? (key: string): string => {
+					const cached = keyCache.get(key);
+					if (cached !== undefined) return cached;
+					const normalized = key
+						.split(".")
+						.map(part => (part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part))
+						.join(".");
+					keyCache.set(key, normalized);
+					return normalized;
+				}
+			: (key: string): string => key;
+
 		// Build hierarchy for forced array fields (for context-aware merging)
 		const allHeaders = Object.keys(records[0]);
-		const normalizedHeaders = allHeaders.map(h =>
-			h
-				.split(".")
-				.map(part => (part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part))
-				.join(".")
-		);
+		const normalizedHeaders = allHeaders.map(normalizeKey);
 		const hierarchy = this.buildForcedArrayHierarchy(forcedArrayFields, normalizedHeaders);
 
-		// Normalize headers by removing array suffix indicators
-		const normalizedRecords = this.normalizeHeaders(records, arraySuffix);
+		// Fuse header normalization (array-suffix stripping) and value transformation into a single
+		// pass over the records — previously two separate full-record allocations.
+		const transformNeeded = needsValueTransformation(options);
+		const transformedRecords: TransformedRecord[] = transformNeeded
+			? this.normalizeAndTransform(records, options, normalizeKey)
+			: records.map(record => this.normalizeRecordKeys(record, normalizeKey));
 
-		// Apply value transformations
-		const transformedRecords = this.applyValueTransformations(normalizedRecords, options);
-
-		// Determine identifier column from available normalized columns.
-		// A configured identifierColumn must exist, otherwise grouping semantics are ambiguous.
-		const availableColumns = Object.keys(normalizedRecords[0] ?? {});
+		// Determine the identifier column from the full normalized header set (order-preserving,
+		// deduped), independent of any per-record value omissions introduced by transformation.
+		const availableColumns: string[] = [];
+		const seenColumns = new Set<string>();
+		for (const normalized of normalizedHeaders) {
+			if (!seenColumns.has(normalized)) {
+				seenColumns.add(normalized);
+				availableColumns.push(normalized);
+			}
+		}
 		if (availableColumns.length === 0) {
 			throw new CsvParseError(
 				"No columns available after filtering. Cannot resolve identifier column for continuation row grouping."
@@ -105,9 +145,13 @@ export class NestedJsonConverter {
 
 		const identifierColumn = configuredIdentifier ?? availableColumns[0];
 
-		// Group by the identifier column
+		// Group by the identifier column. `groupStartRows` tracks the 1-based row where each group's
+		// base row appeared, so a grouping error surfaced during per-group processing can be attributed
+		// to a concrete row in `*Safe` mode.
 		const groups: TransformedRecord[][] = [];
+		const groupStartRows: number[] = [];
 		let currentGroup: TransformedRecord[] = [];
+		let currentGroupStartRow = 0;
 
 		for (let rowIndex = 0; rowIndex < transformedRecords.length; rowIndex++) {
 			const row = transformedRecords[rowIndex];
@@ -118,13 +162,19 @@ export class NestedJsonConverter {
 			if (hasIdentifierValue) {
 				if (currentGroup.length > 0) {
 					groups.push(currentGroup);
+					groupStartRows.push(currentGroupStartRow);
 				}
 				currentGroup = [row];
+				currentGroupStartRow = rowIndex + 1;
 			} else {
 				if (currentGroup.length === 0) {
-					throw new CsvParseError(
-						`Row ${rowIndex + 1} is a continuation row, but no base row exists. Column '${identifierColumn}' must have a value to start a group.`
-					);
+					const message = `Row ${rowIndex + 1} is a continuation row, but no base row exists. Column '${identifierColumn}' must have a value to start a group.`;
+					// In `*Safe` mode, collect and skip the orphan continuation row instead of aborting.
+					if (errorSink) {
+						errorSink({ row: rowIndex + 1, code: "grouping", message });
+						continue;
+					}
+					throw new CsvParseError(message);
 				}
 
 				// Continuation rows should never overwrite the grouping identifier value.
@@ -137,23 +187,67 @@ export class NestedJsonConverter {
 		}
 		if (currentGroup.length > 0) {
 			groups.push(currentGroup);
+			groupStartRows.push(currentGroupStartRow);
 		}
 
-		// First pass: process all groups with hierarchy-aware merging
-		const processedGroups = groups.map(group =>
-			this.processGroupWithHierarchy(group, hierarchy, forcedArrayFields, options)
-		);
+		// Apply offset + limit (both count output records, i.e. groups). A partially buffered
+		// group is never split: each group maps to exactly one output object. `offset` skips
+		// leading groups; `limit` then caps the remainder, so together they select a window.
+		const limit = options.limit;
+		const offset = options.offset && options.offset > 0 ? options.offset : 0;
+		const hasLimit = limit !== undefined && limit > 0;
+		const windowEnd = hasLimit ? offset + (limit as number) : undefined;
+		const hasWindow = offset > 0 || hasLimit;
+		const limitedGroups = hasWindow ? groups.slice(offset, windowEnd) : groups;
+		const limitedGroupStartRows = hasWindow ? groupStartRows.slice(offset, windowEnd) : groupStartRows;
 
-		// Second pass: detect which fields are arrays in any group (auto-detected)
-		const autoArrayFields = this.detectArrayFields(processedGroups);
+		// Precompute the unflatten path plan once for the constant header set, so unflattening each
+		// row reuses the split segments instead of re-splitting every key of every row. The plan
+		// only pays off when amortized over many rows, so skip it for small inputs — notably the
+		// streaming parser, which calls convert() once per (typically tiny) continuation group and
+		// would otherwise rebuild the plan for every group with no benefit.
+		const unflattenPlan =
+			transformedRecords.length >= UNFLATTEN_PLAN_MIN_ROWS ? buildUnflattenPlan(availableColumns, options) : undefined;
 
-		// Merge forced and auto-detected array fields
-		const allArrayFields = new Set([...forcedArrayFields, ...autoArrayFields]);
-
-		// Third pass: normalize all groups to have consistent array fields
-		return processedGroups.map(group =>
-			this.normalizeArrays(group, allArrayFields, forcedArrayFields, emptyArrayBehavior)
-		);
+		// Process all groups with hierarchy-aware merging. Arrays are created ONLY for
+		// forced array fields (`[]` suffix). A repeated non-forced path within a group is
+		// treated as an error rather than being silently promoted to an array.
+		//
+		// In `*Safe` mode, a group whose processing throws is collected as a grouping error and
+		// omitted from the output rather than aborting the whole parse.
+		const result: NestedObject[] = [];
+		for (let g = 0; g < limitedGroups.length; g++) {
+			if (errorSink) {
+				try {
+					const processed = this.processGroupWithHierarchy(
+						limitedGroups[g],
+						hierarchy,
+						forcedArrayFields,
+						arraySuffix,
+						options,
+						unflattenPlan
+					);
+					result.push(this.normalizeArrays(processed, forcedArrayFields, forcedArrayFields, emptyArrayBehavior));
+				} catch (error) {
+					if (error instanceof CsvParseError) {
+						errorSink({ row: limitedGroupStartRows[g], code: "grouping", message: error.message });
+						continue;
+					}
+					throw error;
+				}
+			} else {
+				const processed = this.processGroupWithHierarchy(
+					limitedGroups[g],
+					hierarchy,
+					forcedArrayFields,
+					arraySuffix,
+					options,
+					unflattenPlan
+				);
+				result.push(this.normalizeArrays(processed, forcedArrayFields, forcedArrayFields, emptyArrayBehavior));
+			}
+		}
+		return result;
 	}
 
 	private static hasIdentifierValue(value: TransformedRecordValue): boolean {
@@ -165,182 +259,34 @@ export class NestedJsonConverter {
 	}
 
 	/**
-	 * Apply value transformations (null detection, auto-parse numbers, booleans, dates, custom transformer).
-	 * Transformation order: nullValues → autoParseNumbers → autoParseBooleans → autoParseDates → valueTransformer
+	 * Normalize headers and apply value transformations in a single pass.
+	 * Transformation order: nullValues → autoParseNumbers → autoParseBooleans.
+	 *
+	 * Delegates to the shared {@link transformRecordValues} (passing the key normalizer so array
+	 * suffixes are stripped in the same pass) so the buffered and streaming paths stay in lockstep.
 	 */
-	private static applyValueTransformations(
-		records: InternalCsvRecord[],
-		options: CsvParserOptions
+	private static normalizeAndTransform(
+		records: ConvertibleCsvRecord[],
+		options: CsvParserOptions,
+		normalizeKey: (key: string) => string
 	): TransformedRecord[] {
-		const {
-			autoParseNumbers,
-			preserveUnsafeIntegersAsString,
-			autoParseBooleans,
-			autoParseDates,
-			valueTransformer,
-			nullValues,
-			nullRepresentation,
-		} = options;
-
-		// Default null values
-		const nullSet = new Set((nullValues ?? ["null", "NULL", "nil", "NIL"]).map(v => v.toLowerCase()));
-
-		// If no transformations are needed, return records as-is
-		if (!autoParseNumbers && !autoParseBooleans && !autoParseDates && !valueTransformer && nullValues === undefined) {
-			return records as TransformedRecord[];
-		}
-
-		return records.map(record => {
-			const transformed: TransformedRecord = {};
-
-			for (const [header, value] of Object.entries(record)) {
-				let transformedValue: TransformedRecordValue = value;
-
-				if (isQuotedEmptyCell(value)) {
-					if (nullValues !== undefined && nullSet.has("")) {
-						transformedValue = this.applyNullRepresentation(nullRepresentation);
-						if (nullRepresentation === "omit") {
-							continue;
-						}
-					}
-
-					transformed[header] = transformedValue;
-					continue;
-				}
-
-				// Skip empty values (unless they match nullValues)
-				if (value === "") {
-					// Check if empty string is in nullValues
-					if (nullValues !== undefined && nullSet.has("")) {
-						transformedValue = this.applyNullRepresentation(nullRepresentation);
-						if (nullRepresentation === "omit") {
-							continue; // Skip this field entirely
-						}
-					}
-					transformed[header] = transformedValue;
-					continue;
-				}
-
-				// Step 0: Check for null values (before number/boolean parsing)
-				if (nullValues !== undefined && nullSet.has(value.toLowerCase())) {
-					const nullVal = this.applyNullRepresentation(nullRepresentation);
-					if (nullRepresentation === "omit") {
-						continue; // Skip this field entirely
-					}
-					transformed[header] = nullVal;
-					continue;
-				}
-
-				// Step 1: Auto-parse numbers
-				if (autoParseNumbers) {
-					const parsed = this.tryParseNumber(value, preserveUnsafeIntegersAsString);
-					if (parsed !== null) {
-						transformedValue = parsed;
-					}
-				}
-
-				// Step 2: Auto-parse booleans (only if still a string)
-				if (autoParseBooleans && typeof transformedValue === "string") {
-					const parsed = this.tryParseBoolean(value);
-					if (parsed !== null) {
-						transformedValue = parsed;
-					}
-				}
-
-				// Step 3: Auto-parse dates (only if still a string)
-				if (autoParseDates && typeof transformedValue === "string") {
-					const parsed = this.tryParseDate(value);
-					if (parsed !== null) {
-						transformedValue = parsed;
-					}
-				}
-
-				// Step 4: Apply custom transformer
-				if (valueTransformer) {
-					transformedValue = valueTransformer(transformedValue as string | number | boolean, header) as
-						| string
-						| number
-						| boolean
-						| Date;
-				}
-
-				transformed[header] = transformedValue;
-			}
-
-			return transformed;
-		});
+		const nullSet = resolveNullSet(options);
+		return records.map(record => transformRecordValues(record as InternalCsvRecord, options, nullSet, normalizeKey));
 	}
 
 	/**
-	 * Apply null representation based on option.
+	 * Produce a copy of the record with array-suffix-stripped keys, without value transformation.
+	 * Used when no value transformation is configured.
 	 */
-	private static applyNullRepresentation(
-		representation: CsvParserOptions["nullRepresentation"]
-	): null | undefined | string {
-		switch (representation) {
-			case "null":
-				return null;
-			case "undefined":
-				return undefined;
-			case "empty-string":
-				return "";
-			default:
-				return undefined;
+	private static normalizeRecordKeys(
+		record: ConvertibleCsvRecord,
+		normalizeKey: (key: string) => string
+	): TransformedRecord {
+		const normalized: TransformedRecord = {};
+		for (const key of Object.keys(record)) {
+			normalized[normalizeKey(key)] = (record as InternalCsvRecord)[key];
 		}
-	}
-
-	/**
-	 * Try to parse a string as a number.
-	 * Returns null if the string is not a valid number.
-	 */
-	private static tryParseNumber(value: string, preserveUnsafeIntegersAsString?: boolean): number | string | null {
-		// Don't parse empty strings or whitespace-only
-		if (value.trim() === "") return null;
-
-		// Don't parse strings that look like they might be IDs or codes
-		// (e.g., leading zeros like "007" or "00123")
-		if (/^0\d+$/.test(value)) return null;
-
-		const parsed = Number(value);
-
-		// Check if it's a valid finite number
-		if (!Number.isNaN(parsed) && Number.isFinite(parsed)) {
-			if (preserveUnsafeIntegersAsString && /^-?\d+$/.test(value) && !Number.isSafeInteger(parsed)) {
-				return value;
-			}
-			return parsed;
-		}
-
-		return null;
-	}
-
-	/**
-	 * Try to parse a string as a boolean.
-	 * Returns null if the string is not 'true' or 'false' (case-insensitive).
-	 */
-	private static tryParseBoolean(value: string): boolean | null {
-		const lower = value.toLowerCase().trim();
-		if (lower === "true") return true;
-		if (lower === "false") return false;
-		return null;
-	}
-
-	/**
-	 * Try to parse a string as a Date.
-	 * Returns null if the string is not a valid date.
-	 * Uses JavaScript's Date.parse() for recognition.
-	 */
-	private static tryParseDate(value: string): Date | null {
-		// Don't parse empty strings or pure numbers
-		if (value.trim() === "" || /^-?\d+(\.\d+)?$/.test(value)) return null;
-
-		// Try to parse as date
-		const timestamp = Date.parse(value);
-		if (!Number.isNaN(timestamp)) {
-			return new Date(timestamp);
-		}
-
-		return null;
+		return normalized;
 	}
 
 	private static detectForcedArrayFields(records: ConvertibleCsvRecord[], arraySuffix: string): Set<string> {
@@ -372,28 +318,16 @@ export class NestedJsonConverter {
 		return forcedFields;
 	}
 
-	private static normalizeHeaders(records: ConvertibleCsvRecord[], arraySuffix: string): InternalCsvRecord[] {
-		if (!arraySuffix) return records as InternalCsvRecord[];
-
-		return records.map(record => {
-			const normalized: InternalCsvRecord = {};
-			for (const [key, value] of Object.entries(record)) {
-				// Remove all occurrences of the array suffix from the key
-				const normalizedKey = key
-					.split(".")
-					.map(part => (part.endsWith(arraySuffix) ? part.slice(0, -arraySuffix.length) : part))
-					.join(".");
-				normalized[normalizedKey] = value;
-			}
-			return normalized;
-		});
-	}
-
-	private static processGroup(rows: TransformedRecord[], options: CsvParserOptions): NestedObject {
+	private static processGroup(
+		rows: TransformedRecord[],
+		arraySuffix: string,
+		options: CsvParserOptions,
+		plan?: Map<string, string[]>
+	): NestedObject {
 		const result: NestedObject = {};
 		for (const row of rows) {
-			const rowObj = this.unflatten(row, options);
-			this.deepMerge(result, rowObj);
+			const rowObj = this.unflatten(row, options, plan);
+			this.deepMerge(result, rowObj, arraySuffix);
 		}
 		return result;
 	}
@@ -535,13 +469,15 @@ export class NestedJsonConverter {
 		rows: TransformedRecord[],
 		hierarchy: ForcedArrayHierarchy,
 		forcedArrayFields: Set<string>,
-		options: CsvParserOptions
+		arraySuffix: string,
+		options: CsvParserOptions,
+		plan?: Map<string, string[]>
 	): NestedObject {
 		if (rows.length === 0) return {};
 
 		// If no forced array fields, use the simple merge
 		if (forcedArrayFields.size === 0) {
-			return this.processGroup(rows, options);
+			return this.processGroup(rows, arraySuffix, options, plan);
 		}
 
 		const result: NestedObject = {};
@@ -550,15 +486,24 @@ export class NestedJsonConverter {
 		for (let i = 0; i < rows.length; i++) {
 			const row = rows[i];
 			const isFirstRow = i === 0;
-			const unflattened = this.unflatten(row, options);
+			const unflattened = this.unflatten(row, options, plan);
 
 			if (isFirstRow) {
 				// First row: merge normally and track last items for each forced array
-				this.deepMergeWithTracking(result, unflattened, "", hierarchy, mergeState, forcedArrayFields);
+				this.deepMergeWithTracking(result, unflattened, "", hierarchy, mergeState, forcedArrayFields, arraySuffix);
 			} else {
 				// Continuation row: use context-aware merging
 				const rowContext = this.analyzeRowContext(row, hierarchy);
-				this.contextAwareMerge(result, unflattened, hierarchy, rowContext, mergeState, forcedArrayFields, row);
+				this.contextAwareMerge(
+					result,
+					unflattened,
+					hierarchy,
+					rowContext,
+					mergeState,
+					forcedArrayFields,
+					arraySuffix,
+					row
+				);
 			}
 		}
 
@@ -575,7 +520,8 @@ export class NestedJsonConverter {
 		path: string,
 		hierarchy: ForcedArrayHierarchy,
 		mergeState: MergeState,
-		forcedArrayFields: Set<string>
+		forcedArrayFields: Set<string>,
+		arraySuffix: string
 	): void {
 		for (const key of Object.keys(source)) {
 			const currentPath = path ? `${path}.${key}` : key;
@@ -616,11 +562,12 @@ export class NestedJsonConverter {
 					currentPath,
 					hierarchy,
 					mergeState,
-					forcedArrayFields
+					forcedArrayFields,
+					arraySuffix
 				);
 			} else {
-				// Collision - use standard merge behavior
-				this.deepMerge(target, { [key]: sourceValue });
+				// Collision on a non-forced path - throw (arrays require the `[]` suffix).
+				this.deepMerge(target, { [key]: sourceValue }, arraySuffix, path);
 			}
 		}
 	}
@@ -665,6 +612,7 @@ export class NestedJsonConverter {
 		rowContext: RowContext,
 		mergeState: MergeState,
 		forcedArrayFields: Set<string>,
+		arraySuffix: string,
 		flatRow: TransformedRecord
 	): void {
 		// Determine which array paths need new items vs append to existing
@@ -708,7 +656,8 @@ export class NestedJsonConverter {
 			appendToExistingAt,
 			mergeState,
 			hierarchy,
-			forcedArrayFields
+			forcedArrayFields,
+			arraySuffix
 		);
 	}
 
@@ -780,7 +729,8 @@ export class NestedJsonConverter {
 		appendToExistingAt: Set<string>,
 		mergeState: MergeState,
 		hierarchy: ForcedArrayHierarchy,
-		forcedArrayFields: Set<string>
+		forcedArrayFields: Set<string>,
+		arraySuffix: string
 	): void {
 		// Handle arrays that need new items (from shallowest to deepest)
 		for (const arrayPath of hierarchy.sortedByDepth) {
@@ -861,7 +811,7 @@ export class NestedJsonConverter {
 					if (lastItem && typeof lastItem === "object" && !Array.isArray(lastItem)) {
 						// Merge into the last item
 						if (typeof sourceData === "object" && !Array.isArray(sourceData)) {
-							this.deepMerge(lastItem as NestedObject, sourceData as NestedObject);
+							this.deepMerge(lastItem as NestedObject, sourceData as NestedObject, arraySuffix, arrayPath);
 						}
 					} else {
 						// No last item or last item is not an object - just add
@@ -872,19 +822,24 @@ export class NestedJsonConverter {
 		}
 
 		// Handle non-array fields that weren't part of forced arrays
-		this.mergeNonArrayFields(target, source, forcedArrayFields);
+		this.mergeNonArrayFields(target, source, forcedArrayFields, arraySuffix);
 	}
 
 	/**
 	 * Merge fields that are not part of forced arrays.
-	 * Uses deepMerge for proper collision detection and auto-array creation.
+	 * Uses deepMerge, which throws on a genuine non-forced collision.
 	 */
-	private static mergeNonArrayFields(target: NestedObject, source: NestedObject, forcedArrayFields: Set<string>): void {
+	private static mergeNonArrayFields(
+		target: NestedObject,
+		source: NestedObject,
+		forcedArrayFields: Set<string>,
+		arraySuffix: string
+	): void {
 		// Filter source to only include paths not under forced array fields
 		const filteredSource = this.filterForcedArrayPaths(source, forcedArrayFields, "");
 
 		if (Object.keys(filteredSource).length > 0) {
-			this.deepMerge(target, filteredSource);
+			this.deepMerge(target, filteredSource, arraySuffix);
 		}
 	}
 
@@ -1007,53 +962,42 @@ export class NestedJsonConverter {
 		return this.ensureArrayAtPath(obj, relativePath);
 	}
 
-	private static unflatten(row: TransformedRecord, options: CsvParserOptions): NestedObject {
-		const result: NestedObject = {};
-		const preserveEmptyColumns = options.preserveEmptyColumnAsEmptyString === true;
-		const preserveEmptyStrings = options.preserveEmptyString !== false;
-
-		for (const [key, value] of Object.entries(row)) {
-			if (value === undefined) continue;
-
-			let normalizedValue: NestedValue;
-
-			if (isQuotedEmptyCell(value)) {
-				if (!preserveEmptyStrings) continue;
-				normalizedValue = "";
-			} else if (value === "") {
-				if (!preserveEmptyColumns) continue;
-				normalizedValue = "";
-			} else {
-				normalizedValue = value as NestedValue;
-			}
-
-			const parts = key.split(".");
-			let current: NestedObject = result;
-			for (let i = 0; i < parts.length - 1; i++) {
-				const part = parts[i];
-				if (!current[part]) current[part] = {};
-				current = current[part] as NestedObject;
-			}
-			current[parts[parts.length - 1]] = normalizedValue;
-		}
-		return result;
+	private static unflatten(
+		row: TransformedRecord,
+		options: CsvParserOptions,
+		plan?: Map<string, string[]>
+	): NestedObject {
+		// Headers are already suffix-normalized upstream, so the shared helper's suffix stripping
+		// is a no-op here; it is shared purely to keep the two parsing paths in lockstep. The
+		// precomputed `plan` reuses the per-key split segments across every row.
+		return unflattenRecord(row, options, plan);
 	}
 
 	private static isEffectivelyEmptyValue(value: unknown): boolean {
 		return value === "" || value === undefined || value === null || isQuotedEmptyCell(value);
 	}
 
-	private static deepMerge(target: NestedObject, source: NestedObject): void {
+	/**
+	 * Merge `source` into `target` for non-forced (`[]`) fields.
+	 *
+	 * Arrays are never created here: automatic array grouping was removed, so arrays only
+	 * come from the forced-array (`[]`) path. Two plain objects are merged recursively.
+	 * Any other overlap where the existing leaf already holds a real value is a genuine
+	 * collision and throws {@link CsvParseError} — the caller must add the array suffix to
+	 * collect repeated values into an array. Overwriting an empty/undefined leaf is allowed
+	 * so that sparse continuation rows can fill in blanks.
+	 */
+	private static deepMerge(target: NestedObject, source: NestedObject, arraySuffix: string, path: string = ""): void {
 		for (const key of Object.keys(source)) {
 			const sourceValue = source[key];
 			const targetValue = target[key];
+			const currentPath = path ? `${path}.${key}` : key;
 
-			if (!(key in target)) {
-				// Key doesn't exist in target, just assign it
+			if (!(key in target) || this.isEffectivelyEmptyValue(targetValue)) {
+				// Key absent, or existing leaf is empty - assign (fills blanks from continuation rows).
 				target[key] = sourceValue;
-			} else if (Array.isArray(targetValue)) {
-				// Target is already an array, append the new value
-				(targetValue as NestedValue[]).push(sourceValue);
+			} else if (this.isEffectivelyEmptyValue(sourceValue)) {
+				// Nothing meaningful to merge in - keep the existing value.
 			} else if (
 				typeof targetValue === "object" &&
 				targetValue !== null &&
@@ -1064,123 +1008,16 @@ export class NestedJsonConverter {
 				!Array.isArray(sourceValue) &&
 				!(sourceValue instanceof Date)
 			) {
-				// Both are plain objects (not Date) - check if we should create array of objects
-				// or recursively merge
-				const shouldCreateArray = this.shouldCreateArrayOfObjects(
-					targetValue as NestedObject,
-					sourceValue as NestedObject
-				);
-
-				if (shouldCreateArray) {
-					// Convert to array of objects
-					target[key] = [targetValue, sourceValue];
-				} else {
-					// Recursively merge the nested objects
-					this.deepMerge(targetValue as NestedObject, sourceValue as NestedObject);
-				}
+				// Both are plain objects - recurse.
+				this.deepMerge(targetValue as NestedObject, sourceValue as NestedObject, arraySuffix, currentPath);
 			} else {
-				// Collision detected at this level: convert to array
-				target[key] = [targetValue, sourceValue];
+				// Genuine collision: the same non-forced path has values in multiple rows.
+				throw new CsvParseError(
+					`Column path '${currentPath}' has multiple values within a single group. ` +
+						`Add the array suffix ('${arraySuffix}') to the header to collect repeated values into an array.`
+				);
 			}
 		}
-	}
-
-	private static checkIfAllKeysCollide(obj1: NestedObject, obj2: NestedObject): boolean {
-		// Check if ALL overlapping keys would result in collisions (non-mergeable values).
-		// Returns true only if every overlapping key has primitives/arrays that can't be merged.
-
-		const keys1 = Object.keys(obj1);
-		const keys2 = Object.keys(obj2);
-
-		// Get overlapping keys
-		const overlapping = keys2.filter(k => keys1.includes(k));
-
-		if (overlapping.length === 0) return false;
-
-		// Check each overlapping key
-		for (const key of overlapping) {
-			const val1 = obj1[key];
-			const val2 = obj2[key];
-
-			const isObj1 = typeof val1 === "object" && val1 !== null && !Array.isArray(val1);
-			const isObj2 = typeof val2 === "object" && val2 !== null && !Array.isArray(val2);
-
-			// If both are plain objects, this key could be merged (not a collision)
-			if (isObj1 && isObj2) {
-				return false; // Not ALL keys would collide
-			}
-			// If at least one is not an object, this key would collide
-			// Continue checking other keys
-		}
-
-		// All overlapping keys have non-object values, so all would collide
-		return true;
-	}
-
-	private static shouldCreateArrayOfObjects(obj1: NestedObject, obj2: NestedObject): boolean {
-		// Create an array of objects at this level if:
-		// 1. There's an immediate collision (overlapping keys with non-object values), OR
-		// 2. All overlapping nested object keys would result in primitive collisions
-		//    (indicating these are two distinct records, not mergeable structures)
-
-		const keys1 = new Set(Object.keys(obj1));
-		const keys2 = new Set(Object.keys(obj2));
-
-		let hasNestedObjects = false;
-		let allNestedWouldCollide = true;
-
-		for (const key of keys2) {
-			if (keys1.has(key)) {
-				const val1 = obj1[key];
-				const val2 = obj2[key];
-
-				const isObj1 = typeof val1 === "object" && val1 !== null && !Array.isArray(val1);
-				const isObj2 = typeof val2 === "object" && val2 !== null && !Array.isArray(val2);
-
-				// If at least one is NOT a plain object, we have an immediate collision
-				if (!isObj1 || !isObj2) {
-					return true;
-				}
-
-				// Both are objects - check if they would collide when merged
-				hasNestedObjects = true;
-				if (!this.checkIfAllKeysCollide(val1 as NestedObject, val2 as NestedObject)) {
-					allNestedWouldCollide = false;
-				}
-			}
-		}
-
-		// If we have nested objects and ALL of them would result in primitive collisions,
-		// then we should create array at this level to preserve the record structure
-		return hasNestedObjects && allNestedWouldCollide;
-	}
-
-	private static detectArrayFields(groups: NestedObject[]): Set<string> {
-		const arrayFields = new Set<string>();
-
-		const checkForArrays = (obj: NestedObject, path: string = "") => {
-			for (const [key, value] of Object.entries(obj)) {
-				const currentPath = path ? `${path}.${key}` : key;
-
-				if (Array.isArray(value)) {
-					arrayFields.add(currentPath);
-					// Recursively check array elements for nested arrays
-					for (const item of value) {
-						if (item && typeof item === "object" && !Array.isArray(item)) {
-							checkForArrays(item as NestedObject, currentPath);
-						}
-					}
-				} else if (value && typeof value === "object" && !(value instanceof Date)) {
-					checkForArrays(value as NestedObject, currentPath);
-				}
-			}
-		};
-
-		for (const group of groups) {
-			checkForArrays(group);
-		}
-
-		return arrayFields;
 	}
 
 	private static normalizeArrays(

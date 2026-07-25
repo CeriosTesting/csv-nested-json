@@ -18,22 +18,25 @@ export {
 export type { JsonToCsvOptions } from "./json-to-csv";
 // JSON to CSV conversion
 export { JsonToCsv } from "./json-to-csv";
+export type { JsonToCsvStreamOptions } from "./json-to-csv-stream";
+// Streaming JSON to CSV writer
+export { JsonToCsvStream } from "./json-to-csv-stream";
 export { NestedJsonConverter } from "./nested-json-converter";
 
 // Types
 export type {
 	ArrayMode,
+	CsvParseResult,
 	CsvParserOptions,
 	CsvRecord,
+	CsvRowError,
+	CsvRowErrorCode,
 	DuplicateHeaderStrategy,
 	EmptyArrayBehavior,
-	HeaderTransformer,
 	NestedObject,
 	NestedValue,
 	NullRepresentation,
 	ProgressCallback,
 	ProgressInfo,
-	RowFilter,
 	ValidationMode,
-	ValueTransformer,
 } from "./types";

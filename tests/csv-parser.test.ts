@@ -1,5 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
 import { CsvParser } from "../src/csv-parser";
 
 const TEST_DATA_DIR = path.join(__dirname, "test-data");
@@ -55,7 +58,7 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "John Doe",
 						email: "john@example.com",
 					},
@@ -73,9 +76,9 @@ describe("CsvParser", () => {
 				const result = CsvParser.parseFileSync(csvPath);
 
 				expect(result).toEqual([
-					{ id: "1", name: "Alice", age: "25" },
-					{ id: "2", name: "Bob", age: "30" },
-					{ id: "3", name: "Charlie", age: "35" },
+					{ id: 1, name: "Alice", age: 25 },
+					{ id: 2, name: "Bob", age: 30 },
+					{ id: 3, name: "Charlie", age: 35 },
 				]);
 			});
 		});
@@ -91,7 +94,7 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "John Doe",
 						address: {
 							street: "123 Main St",
@@ -111,7 +114,7 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "Jane Smith",
 						contact: {
 							address: {
@@ -135,23 +138,23 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "Alice",
-						profile: { age: "28", occupation: "Engineer" },
+						profile: { age: 28, occupation: "Engineer" },
 					},
 					{
-						id: "2",
+						id: 2,
 						name: "Bob",
-						profile: { age: "32", occupation: "Designer" },
+						profile: { age: 32, occupation: "Designer" },
 					},
 				]);
 			});
 		});
 
-		describe("Arrays (via collision)", () => {
+		describe("Arrays (via [] suffix)", () => {
 			it("should create arrays when same key appears in multiple rows of same group", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "array-simple.csv");
-				const csvContent = `id,name,hobby
+				const csvContent = `id,name,hobby[]
 1,John,Reading
 ,,Swimming
 ,,Cycling`;
@@ -161,7 +164,7 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "John",
 						hobby: ["Reading", "Swimming", "Cycling"],
 					},
@@ -170,7 +173,7 @@ describe("CsvParser", () => {
 
 			it("should create arrays for nested properties", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "array-nested.csv");
-				const csvContent = `id,name,phones.type,phones.number
+				const csvContent = `id,name,phones[].type,phones[].number
 1,Alice,mobile,555-0001
 ,,home,555-0002
 ,,work,555-0003`;
@@ -180,7 +183,7 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "Alice",
 						phones: [
 							{ type: "mobile", number: "555-0001" },
@@ -193,7 +196,7 @@ describe("CsvParser", () => {
 
 			it("should handle arrays with deeply nested objects", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "array-deep-nested.csv");
-				const csvContent = `id,name,orders.id,orders.items.name,orders.items.price
+				const csvContent = `id,name,orders[].id,orders[].items.name,orders[].items.price
 1,Customer1,100,Widget,9.99
 ,,101,Gadget,19.99`;
 				fs.writeFileSync(csvPath, csvContent);
@@ -202,21 +205,32 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "Customer1",
 						orders: [
-							{ id: "100", items: { name: "Widget", price: "9.99" } },
-							{ id: "101", items: { name: "Gadget", price: "19.99" } },
+							{ id: 100, items: { name: "Widget", price: 9.99 } },
+							{ id: 101, items: { name: "Gadget", price: 19.99 } },
 						],
 					},
 				]);
+			});
+
+			it("should throw when a non-[] column repeats across continuation rows", () => {
+				const csvPath = path.join(TEST_DATA_DIR, "array-missing-suffix.csv");
+				const csvContent = `id,name,hobby
+1,John,Reading
+,,Swimming`;
+				fs.writeFileSync(csvPath, csvContent);
+
+				// Without the [] suffix, a repeated value is a collision, not an auto-array.
+				expect(() => CsvParser.parseFileSync(csvPath)).toThrow(/array suffix/);
 			});
 		});
 
 		describe("Complex scenarios", () => {
 			it("should handle mix of flat, nested, and array data", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "complex-mix.csv");
-				const csvContent = `id,name,email,address.street,address.city,skills
+				const csvContent = `id,name,email,address.street,address.city,skills[]
 1,John Doe,john@example.com,123 Main St,NYC,JavaScript
 ,,,,,TypeScript
 ,,,,,React`;
@@ -226,7 +240,7 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "John Doe",
 						email: "john@example.com",
 						address: {
@@ -240,7 +254,7 @@ describe("CsvParser", () => {
 
 			it("should handle multiple groups with arrays", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "multiple-groups-arrays.csv");
-				const csvContent = `id,name,tags
+				const csvContent = `id,name,tags[]
 1,User1,tag1
 ,,tag2
 2,User2,tag3
@@ -252,12 +266,12 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "User1",
 						tags: ["tag1", "tag2"],
 					},
 					{
-						id: "2",
+						id: 2,
 						name: "User2",
 						tags: ["tag3", "tag4", "tag5"],
 					},
@@ -275,12 +289,12 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "Alice",
 						email: "alice@example.com",
 					},
 					{
-						id: "2",
+						id: 2,
 						name: "Bob",
 						phone: "555-1234",
 					},
@@ -289,7 +303,7 @@ describe("CsvParser", () => {
 
 			it("should handle complex nested arrays with multiple properties", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "complex-arrays.csv");
-				const csvContent = `id,name,projects.name,projects.role,projects.duration
+				const csvContent = `id,name,projects[].name,projects[].role,projects[].duration
 1,Developer,Project A,Lead,12 months
 ,,Project B,Contributor,6 months
 ,,Project C,Lead,8 months`;
@@ -299,7 +313,7 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "Developer",
 						projects: [
 							{ name: "Project A", role: "Lead", duration: "12 months" },
@@ -312,7 +326,7 @@ describe("CsvParser", () => {
 
 			it("should handle realistic user data with multiple nested levels and arrays", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "realistic-user.csv");
-				const csvContent = `id,username,email,profile.firstName,profile.lastName,profile.age,addresses.type,addresses.street,addresses.city,addresses.zip
+				const csvContent = `id,username,email,profile.firstName,profile.lastName,profile.age,addresses[].type,addresses[].street,addresses[].city,addresses[].zip
 1,johndoe,john@example.com,John,Doe,30,home,123 Main St,New York,10001
 ,,,,,,work,456 Office Blvd,New York,10002
 2,janedoe,jane@example.com,Jane,Doe,28,,,,
@@ -323,37 +337,37 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						username: "johndoe",
 						email: "john@example.com",
 						profile: {
 							firstName: "John",
 							lastName: "Doe",
-							age: "30",
+							age: 30,
 						},
 						addresses: [
 							{
 								type: "home",
 								street: "123 Main St",
 								city: "New York",
-								zip: "10001",
+								zip: 10001,
 							},
 							{
 								type: "work",
 								street: "456 Office Blvd",
 								city: "New York",
-								zip: "10002",
+								zip: 10002,
 							},
 						],
 					},
 					{
-						id: "2",
+						id: 2,
 						username: "janedoe",
 						email: "jane@example.com",
 						profile: {
 							firstName: "Jane",
 							lastName: "Doe",
-							age: "28",
+							age: 28,
 						},
 						addresses: [
 							{
@@ -369,7 +383,7 @@ describe("CsvParser", () => {
 
 			it("should maintain consistent array structure across all records", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "consistent-arrays.csv");
-				const csvContent = `id,name,tags
+				const csvContent = `id,name,tags[]
 1,User1,tag1
 ,,tag2
 ,,tag3
@@ -383,17 +397,17 @@ describe("CsvParser", () => {
 				// All records should have 'tags' as an array, even User2 with only one tag
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "User1",
 						tags: ["tag1", "tag2", "tag3"],
 					},
 					{
-						id: "2",
+						id: 2,
 						name: "User2",
 						tags: ["single-tag"], // Should be array with one element
 					},
 					{
-						id: "3",
+						id: 3,
 						name: "User3",
 						tags: ["tag-a", "tag-b"],
 					},
@@ -410,12 +424,12 @@ describe("CsvParser", () => {
 
 				const result = CsvParser.parseFileSync(csvPath);
 
-				expect(result).toEqual([{ id: "1" }]);
+				expect(result).toEqual([{ id: 1 }]);
 			});
 
 			it("should handle rows with whitespace in identifier", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "whitespace-id.csv");
-				const csvContent = `id,name
+				const csvContent = `id,name[]
 1,Alice
 ,Bob`;
 				fs.writeFileSync(csvPath, csvContent);
@@ -425,7 +439,7 @@ describe("CsvParser", () => {
 				// Empty identifier should be treated as continuation
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: ["Alice", "Bob"],
 					},
 				]);
@@ -441,7 +455,7 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						level1: {
 							level2: {
 								level3: {
@@ -459,7 +473,7 @@ describe("CsvParser", () => {
 
 			it("should handle single row continuation without identifier", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "single-continuation.csv");
-				const csvContent = `id,name,hobby
+				const csvContent = `id,name,hobby[]
 1,Alice,Reading
 ,,Swimming`;
 				fs.writeFileSync(csvPath, csvContent);
@@ -468,7 +482,7 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "Alice",
 						hobby: ["Reading", "Swimming"],
 					},
@@ -487,7 +501,7 @@ describe("CsvParser", () => {
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "John",
 						description: "A developer, designer, and writer",
 					},
@@ -506,7 +520,7 @@ Line 3"`;
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "Alice",
 						bio: "Line 1\nLine 2\nLine 3",
 					},
@@ -523,7 +537,7 @@ Line 3"`;
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						name: "Bob",
 						quote: 'He said "Hello" to me',
 					},
@@ -538,8 +552,8 @@ Line 3"`;
 				const result = CsvParser.parseFileSync(csvPath);
 
 				expect(result).toEqual([
-					{ id: "1", name: "Alice" },
-					{ id: "2", name: "Bob" },
+					{ id: 1, name: "Alice" },
+					{ id: 2, name: "Bob" },
 				]);
 			});
 
@@ -551,8 +565,8 @@ Line 3"`;
 				const result = CsvParser.parseFileSync(csvPath);
 
 				expect(result).toEqual([
-					{ id: "1", name: "Alice" },
-					{ id: "2", name: "Bob" },
+					{ id: 1, name: "Alice" },
+					{ id: 2, name: "Bob" },
 				]);
 			});
 
@@ -564,8 +578,8 @@ Line 3"`;
 				const result = CsvParser.parseFileSync(csvPath);
 
 				expect(result).toEqual([
-					{ id: "1", name: "Alice" },
-					{ id: "2", name: "Bob" },
+					{ id: 1, name: "Alice" },
+					{ id: 2, name: "Bob" },
 				]);
 			});
 
@@ -576,14 +590,14 @@ Line 3"`;
 2,Bob,bob@example.com,extra3`;
 				fs.writeFileSync(csvPath, csvContent);
 
-				const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
+				const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 				const result = CsvParser.parseFileSync(csvPath);
 
 				// Default should warn
 				expect(result).toEqual([
-					{ id: "1", name: "Alice", email: "alice@example.com" },
-					{ id: "2", name: "Bob", email: "bob@example.com" },
+					{ id: 1, name: "Alice", email: "alice@example.com" },
+					{ id: 2, name: "Bob", email: "bob@example.com" },
 				]);
 				expect(consoleWarnSpy).toHaveBeenCalledTimes(2);
 
@@ -600,8 +614,8 @@ Line 3"`;
 				const result = CsvParser.parseFileSync(csvPath, { validationMode: "ignore" });
 
 				expect(result).toEqual([
-					{ id: "1", name: "Alice" },
-					{ id: "2", name: "Bob" },
+					{ id: 1, name: "Alice" },
+					{ id: 2, name: "Bob" },
 				]);
 			});
 
@@ -612,13 +626,13 @@ Line 3"`;
 2,Bob,extra2,extra3`;
 				fs.writeFileSync(csvPath, csvContent);
 
-				const consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation();
+				const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 				const result = CsvParser.parseFileSync(csvPath, { validationMode: "warn" });
 
 				expect(result).toEqual([
-					{ id: "1", name: "Alice" },
-					{ id: "2", name: "Bob" },
+					{ id: 1, name: "Alice" },
+					{ id: 2, name: "Bob" },
 				]);
 
 				expect(consoleWarnSpy).toHaveBeenCalledTimes(2);
@@ -648,7 +662,7 @@ Line 3"`;
 		describe("Deep nested mixed structures", () => {
 			it("should support 3-level nesting with arrays of complex objects", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "three-level-complex.csv");
-				const csvContent = `id,company,projects.name,projects.team.lead,projects.team.size
+				const csvContent = `id,company,projects[].name,projects[].team.lead,projects[].team.size
 1,TechCorp,Website,Alice,5
 ,,Mobile App,Bob,8
 2,DesignCo,Dashboard,Charlie,3`;
@@ -658,26 +672,26 @@ Line 3"`;
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						company: "TechCorp",
 						projects: [
 							{
 								name: "Website",
-								team: { lead: "Alice", size: "5" },
+								team: { lead: "Alice", size: 5 },
 							},
 							{
 								name: "Mobile App",
-								team: { lead: "Bob", size: "8" },
+								team: { lead: "Bob", size: 8 },
 							},
 						],
 					},
 					{
-						id: "2",
+						id: 2,
 						company: "DesignCo",
 						projects: [
 							{
 								name: "Dashboard",
-								team: { lead: "Charlie", size: "3" },
+								team: { lead: "Charlie", size: 3 },
 							},
 						],
 					},
@@ -686,7 +700,7 @@ Line 3"`;
 
 			it("should support multiple array fields at same level", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "multi-array-same-level.csv");
-				const csvContent = `id,user,skills,certifications.name,certifications.year
+				const csvContent = `id,user,skills[],certifications[].name,certifications[].year
 1,Alice,JavaScript,AWS,2023
 ,,TypeScript,Azure,2024
 ,,React,,
@@ -698,26 +712,26 @@ Line 3"`;
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						user: "Alice",
 						skills: ["JavaScript", "TypeScript", "React"],
 						certifications: [
-							{ name: "AWS", year: "2023" },
-							{ name: "Azure", year: "2024" },
+							{ name: "AWS", year: 2023 },
+							{ name: "Azure", year: 2024 },
 						],
 					},
 					{
-						id: "2",
+						id: 2,
 						user: "Bob",
 						skills: ["Python", "Django"],
-						certifications: [{ name: "GCP", year: "2023" }],
+						certifications: [{ name: "GCP", year: 2023 }],
 					},
 				]);
 			});
 
 			it("should handle combination of nested objects and arrays at different paths", () => {
 				const csvPath = path.join(TEST_DATA_DIR, "mixed-paths-arrays.csv");
-				const csvContent = `id,company,metadata.created,metadata.updated,tags
+				const csvContent = `id,company,metadata.created,metadata.updated,tags[]
 1,TechCorp,2023-01-01,2023-12-31,javascript
 ,,,,typescript
 ,,,,nodejs
@@ -729,7 +743,7 @@ Line 3"`;
 
 				expect(result).toEqual([
 					{
-						id: "1",
+						id: 1,
 						company: "TechCorp",
 						metadata: {
 							created: "2023-01-01",
@@ -738,7 +752,7 @@ Line 3"`;
 						tags: ["javascript", "typescript", "nodejs"],
 					},
 					{
-						id: "2",
+						id: 2,
 						company: "DesignCo",
 						metadata: {
 							created: "2024-01-01",
